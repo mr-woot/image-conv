@@ -1106,10 +1106,10 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                     for root, _, files in os.walk(emp_dir):
                         for file in files:
                             file_lower = file.lower()
-                            # Check for image files first
+                            # Check for profile images first
                             if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
                                 profile_img_path = os.path.join(root, file)
-                            elif re.search(r'sign(ature)?.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
+                            elif re.search(r'(signature|sign).*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
                                 signature_img_path = os.path.join(root, file)
                     
                     # If image not found, look for PDF files
@@ -1126,7 +1126,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         for root, _, files in os.walk(emp_dir):
                             for file in files:
                                 file_lower = file.lower()
-                                if re.search(r'sign(ature)?.*\.pdf$', file_lower):
+                                if re.search(r'(signature|sign).*\.pdf$', file_lower):
                                     signature_img_path = os.path.join(root, file)
                                     signature_is_pdf = True
                                     break
@@ -1294,7 +1294,12 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         file_lower = file.lower()
                         
                         # Try to extract employee code from the filename
-                        emp_code_match = re.search(r'(\d{4,})(?=\.|_)', file_lower)
+                        emp_code_match = (
+                            re.search(r'(\d{4,})(?=\.|_)', file_lower) or 
+                            re.match(r'^(\d{4,}).*?(profile|sign|signature)', file_lower) or
+                            re.search(r'(\d{4,}).*?(profile|sign|signature)', file_lower)
+                        )
+                        
                         if emp_code_match:
                             emp_code = emp_code_match.group(1)
                             
@@ -1306,7 +1311,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             # Determine if it's a profile or signature image
                             if re.search(r'profile', file_lower):
                                 employee_images[emp_code]['profile'] = file_path
-                            elif re.search(r'sign(ature)?', file_lower):
+                            elif re.search(r'(signature|sign)', file_lower):
                                 employee_images[emp_code]['signature'] = file_path
                             
                             image_count += 1
@@ -1327,7 +1332,12 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         file_lower = file.lower()
                         
                         # Try to extract employee code from the filename
-                        emp_code_match = re.search(r'(\d{4,})(?=\.|_)', file_lower)
+                        emp_code_match = (
+                            re.search(r'(\d{4,})(?=\.|_)', file_lower) or 
+                            re.match(r'^(\d{4,}).*?(profile|sign|signature)', file_lower) or
+                            re.search(r'(\d{4,}).*?(profile|sign|signature)', file_lower)
+                        )
+                        
                         if emp_code_match:
                             emp_code = emp_code_match.group(1)
                             
@@ -1341,7 +1351,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                                 employee_images[emp_code]['profile'] = file_path
                                 employee_images[emp_code]['profile_is_pdf'] = True
                                 pdf_count += 1
-                            elif re.search(r'sign(ature)?', file_lower) and not employee_images[emp_code]['signature']:
+                            elif re.search(r'(signature|sign)', file_lower) and not employee_images[emp_code]['signature']:
                                 employee_images[emp_code]['signature'] = file_path
                                 employee_images[emp_code]['signature_is_pdf'] = True
                                 pdf_count += 1
@@ -1781,8 +1791,8 @@ def employee_image_processor_page():
        - **Direct image files**: Images are directly in the parent ZIP with employee codes in their filenames (e.g., `profile_image10177.jpg`)
     3. For nested ZIP files, the employee code is taken from the ZIP filename
     4. For direct images, the employee code is extracted from the image filename
-    5. The tool extracts profile images and signature images based on filename patterns
-    6. Supports various image formats including JPG, PNG, JFIF, and others; PDF files with "profile" or "signature" in the name will be automatically converted to images
+    5. The tool extracts profile images (containing EXACTLY "profile") and signature images (containing EITHER "signature" OR "sign") based on filename patterns
+    6. Supports various image formats including JPG, PNG, JFIF, and others; PDF files with "profile", "signature", or "sign" in the name will be automatically converted to images
     7. Files are renamed to a standardized format: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
     8. All processed images are packaged into a single ZIP file for download
     """)
@@ -1911,6 +1921,7 @@ def employee_image_processor_page():
         │   ├── aadhar_card_front.jpg
         │   ├── profile_image.jpg    # Will be used for Profile image
         │   ├── signature.jpg        # Will be used for Signature image
+        │   ├── sign.jpg             # Also recognized as signature image
         │   ├── profile.pdf          # Alternatively, PDFs are supported
         │   ├── signature.pdf        # Alternatively, PDFs are supported
         │   └── ...
@@ -1926,6 +1937,7 @@ def employee_image_processor_page():
         Main.zip
         ├── profile_image10177.jpg    # Employee code = 10177, Profile image
         ├── signature10177.jpg        # Employee code = 10177, Signature image
+        ├── sign10177.jpg             # Employee code = 10177, Signature image
         ├── profile10177.pdf          # Employee code = 10177, Profile (PDF)
         ├── sign10178.pdf             # Employee code = 10178, Signature (PDF)
         ├── profile_image10178.jpg    # Employee code = 10178, Profile image
@@ -1936,9 +1948,14 @@ def employee_image_processor_page():
         ### Important Notes:
         
         1. For nested ZIP files, the employee code is taken directly from the ZIP filename
-        2. For direct images, the employee code is extracted from the image filename
+        2. For direct images, the employee code is extracted from the image filename:
+           - Employee code can be at any position in the filename (e.g., `10177_profile.jpg`, `profile10177.jpg`, or `10177_employee_profile.jpg`)
+           - Employee code is recognized as a sequence of at least 4 digits
+           - Employee code can be at the beginning, middle, or before profile/signature keywords
         3. The tool supports both image files (.jpg, .jpeg, .png, .jfif, etc.) and PDF files
-        4. The tool looks for any files containing "profile" or "sign"/"signature" in their names
+        4. The tool recognizes specific naming patterns:
+           - Profile images: files containing EXACTLY "profile" in their names (case insensitive)
+           - Signature images: files containing EITHER "signature" OR "sign" in their names (case insensitive)
         5. PDF files will be automatically converted to images (first page only)
         6. All extracted images are standardized to: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
         7. File size limit is 5GB for the main ZIP file
