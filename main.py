@@ -1109,7 +1109,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             # Check for profile images first
                             if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
                                 profile_img_path = os.path.join(root, file)
-                            elif re.search(r'(signature|sign).*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
+                            elif re.search(r'(signature).*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
                                 signature_img_path = os.path.join(root, file)
                     
                     # If image not found, look for PDF files
@@ -1126,7 +1126,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         for root, _, files in os.walk(emp_dir):
                             for file in files:
                                 file_lower = file.lower()
-                                if re.search(r'(signature|sign).*\.pdf$', file_lower):
+                                if re.search(r'(signature).*\.pdf$', file_lower):
                                     signature_img_path = os.path.join(root, file)
                                     signature_is_pdf = True
                                     break
@@ -1311,7 +1311,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             # Determine if it's a profile or signature image
                             if re.search(r'profile', file_lower):
                                 employee_images[emp_code]['profile'] = file_path
-                            elif re.search(r'(signature|sign)', file_lower):
+                            elif re.search(r'(signature)', file_lower):
                                 employee_images[emp_code]['signature'] = file_path
                             
                             image_count += 1
@@ -1351,7 +1351,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                                 employee_images[emp_code]['profile'] = file_path
                                 employee_images[emp_code]['profile_is_pdf'] = True
                                 pdf_count += 1
-                            elif re.search(r'(signature|sign)', file_lower) and not employee_images[emp_code]['signature']:
+                            elif re.search(r'(signature)', file_lower) and not employee_images[emp_code]['signature']:
                                 employee_images[emp_code]['signature'] = file_path
                                 employee_images[emp_code]['signature_is_pdf'] = True
                                 pdf_count += 1
