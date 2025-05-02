@@ -1715,32 +1715,21 @@ def employee_image_processor_page():
     8. All processed images are packaged into a single ZIP file for download
     """)
     
-    st.warning("""
-    ### Large File Upload Instructions
+    # File upload warning for large files
+    # st.warning("""
+    # ### Large File Upload Instructions
     
-    For files larger than 500MB:
-    1. Ensure you have a stable internet connection
-    2. Keep the browser tab active during upload
-    3. The upload may take several minutes - be patient and don't close the tab
-    4. If you get a timeout or network error, try these solutions:
-       - Break up your ZIP file into smaller ZIPs (200-300MB each)
-       - Try a different browser (Firefox or Chrome often work best)
-       - For Streamlit Cloud deployment: Create a `.streamlit/config.toml` file with:
-         ```toml
-         [server]
-         maxUploadSize = 5000
-         ```
+    # For files larger than 500MB:
+    # 1. Ensure you have a stable internet connection
+    # 2. Keep the browser tab active during upload
+    # 3. The upload may take several minutes - be patient and don't close the tab
+    # 4. If you get a timeout or network error, try these solutions:
+    #    - Break up your ZIP file into smaller ZIPs (200-300MB each)
+    #    - Try a different browser (Firefox or Chrome often work best)
+    #    - Run the application locally for better performance
     
-    You can upload ZIP files up to 5GB in size (with proper configuration).
-    """)
-    
-    # Configure server before upload
-    if not st.session_state.get("configured_timeouts"):
-        import streamlit.config as stc
-        # Set server connection and socket timeouts (in seconds)
-        stc.set_option("server.connectionTimeout", 3600)  # 1 hour connection timeout
-        stc.set_option("server.timeout", 3600)  # 1 hour socket timeout
-        st.session_state["configured_timeouts"] = True
+    # You can upload ZIP files up to 5GB in size (with proper configuration).
+    # """)
     
     # File uploader with explicit timeout messages
     uploaded_zip = st.file_uploader(
