@@ -1744,11 +1744,11 @@ def employee_image_processor_page():
                 for error in pdf_conversion_errors:
                     st.markdown(f"- {error}")
     elif not poppler_available:
-        st.warning("""
-        ⚠️ **PDF support is partially available, but Poppler is missing.** 
+        # st.warning("""
+        # ⚠️ **PDF support is partially available, but Poppler is missing.** 
         
-        PDF files will not be processed correctly until you install Poppler:
-        """)
+        # PDF files will not be processed correctly until you install Poppler:
+        # """)
         
         with st.expander("Poppler Installation Instructions"):
             st.markdown("""
@@ -1782,36 +1782,36 @@ def employee_image_processor_page():
         st.success("✅ PDF support is fully enabled. The application will automatically convert PDF files to images.")
     
     # Information about the tool
-    st.markdown("""
-    ### How it works:
+    # st.markdown("""
+    # ### How it works:
     
-    1. Upload a **ZIP file** containing employee image files
-    2. The tool supports two organization methods:
-       - **Nested ZIP files**: Each employee's files are in a separate ZIP file named with their employee code (e.g., `489713.zip`)
-       - **Direct image files**: Images are directly in the parent ZIP with employee codes in their filenames (e.g., `profile_image10177.jpg`)
-    3. For nested ZIP files, the employee code is taken from the ZIP filename
-    4. For direct images, the employee code is extracted from the image filename
-    5. The tool extracts profile images (containing EXACTLY "profile") and signature images (containing EITHER "signature" OR "sign") based on filename patterns
-    6. Supports various image formats including JPG, PNG, JFIF, and others; PDF files with "profile", "signature", or "sign" in the name will be automatically converted to images
-    7. Files are renamed to a standardized format: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
-    8. All processed images are packaged into a single ZIP file for download
-    """)
+    # 1. Upload a **ZIP file** containing employee image files
+    # 2. The tool supports two organization methods:
+    #    - **Nested ZIP files**: Each employee's files are in a separate ZIP file named with their employee code (e.g., `489713.zip`)
+    #    - **Direct image files**: Images are directly in the parent ZIP with employee codes in their filenames (e.g., `profile_image10177.jpg`)
+    # 3. For nested ZIP files, the employee code is taken from the ZIP filename
+    # 4. For direct images, the employee code is extracted from the image filename
+    # 5. The tool extracts profile images (containing EXACTLY "profile") and signature images (containing EITHER "signature" OR "sign") based on filename patterns
+    # 6. Supports various image formats including JPG, PNG, JFIF, and others; PDF files with "profile", "signature", or "sign" in the name will be automatically converted to images
+    # 7. Files are renamed to a standardized format: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
+    # 8. All processed images are packaged into a single ZIP file for download
+    # """)
     
     # File upload warning for large files
-    st.warning("""
-    ### Large File Upload Instructions
+    # st.warning("""
+    # ### Large File Upload Instructions
     
-    For files larger than 500MB:
-    1. Ensure you have a stable internet connection
-    2. Keep the browser tab active during upload
-    3. The upload may take several minutes - be patient and don't close the tab
-    4. If you get a timeout or network error, try these solutions:
-       - Break up your ZIP file into smaller ZIPs (200-300MB each)
-       - Try a different browser (Firefox or Chrome often work best)
-       - Run the application locally for better performance
+    # For files larger than 500MB:
+    # 1. Ensure you have a stable internet connection
+    # 2. Keep the browser tab active during upload
+    # 3. The upload may take several minutes - be patient and don't close the tab
+    # 4. If you get a timeout or network error, try these solutions:
+    #    - Break up your ZIP file into smaller ZIPs (200-300MB each)
+    #    - Try a different browser (Firefox or Chrome often work best)
+    #    - Run the application locally for better performance
     
-    You can upload ZIP files up to 5GB in size (with proper configuration).
-    """)
+    # You can upload ZIP files up to 5GB in size (with proper configuration).
+    # """)
     
     # File uploader with explicit timeout messages
     uploaded_zip = st.file_uploader(
@@ -1892,74 +1892,74 @@ def employee_image_processor_page():
                 3. **Run the application locally** by installing it on your computer
                 4. **Check your internet connection** stability
                 """)
-    else:
+    # else:
         # Show alternative upload methods if no file is uploaded
-        with st.expander("Having trouble with large files?"):
-            st.markdown("""
-            ### Alternatives for very large files:
+        # with st.expander("Having trouble with large files?"):
+            # st.markdown("""
+            # ### Alternatives for very large files:
             
-            1. **Split your ZIP** into multiple smaller files (we recommend 200-300MB per ZIP)
-            2. **Run the application locally** on your computer:
-               ```
-               pip install -r requirements.txt
-               streamlit run main.py
-               ```
-            3. **Use a more stable network** connection when uploading
-            4. **Contact support** if you continue experiencing issues
-            """)
+            # 1. **Split your ZIP** into multiple smaller files (we recommend 200-300MB per ZIP)
+            # 2. **Run the application locally** on your computer:
+            #    ```
+            #    pip install -r requirements.txt
+            #    streamlit run main.py
+            #    ```
+            # 3. **Use a more stable network** connection when uploading
+            # 4. **Contact support** if you continue experiencing issues
+            # """)
             
     # Help section
-    with st.expander("Need Help?"):
-        st.markdown("""
-        ### Expected Structure Options:
+    # with st.expander("Need Help?"):
+        # st.markdown("""
+        # ### Expected Structure Options:
         
-        #### Option 1: Nested ZIP files - Employee code from ZIP filename
-        ```
-        Main.zip
-        ├── 10177.zip    # Employee code = 10177
-        │   ├── aadhar_card_back.jpg
-        │   ├── aadhar_card_front.jpg
-        │   ├── profile_image.jpg    # Will be used for Profile image
-        │   ├── signature.jpg        # Will be used for Signature image
-        │   ├── sign.jpg             # Also recognized as signature image
-        │   ├── profile.pdf          # Alternatively, PDFs are supported
-        │   ├── signature.pdf        # Alternatively, PDFs are supported
-        │   └── ...
-        ├── 10178.zip    # Employee code = 10178
-        │   ├── profile_image.jpg    # Will be used for Profile image
-        │   ├── signature.jpg        # Will be used for Signature image
-        │   └── ...
-        └── ...
-        ```
+        # #### Option 1: Nested ZIP files - Employee code from ZIP filename
+        # ```
+        # Main.zip
+        # ├── 10177.zip    # Employee code = 10177
+        # │   ├── aadhar_card_back.jpg
+        # │   ├── aadhar_card_front.jpg
+        # │   ├── profile_image.jpg    # Will be used for Profile image
+        # │   ├── signature.jpg        # Will be used for Signature image
+        # │   ├── sign.jpg             # Also recognized as signature image
+        # │   ├── profile.pdf          # Alternatively, PDFs are supported
+        # │   ├── signature.pdf        # Alternatively, PDFs are supported
+        # │   └── ...
+        # ├── 10178.zip    # Employee code = 10178
+        # │   ├── profile_image.jpg    # Will be used for Profile image
+        # │   ├── signature.jpg        # Will be used for Signature image
+        # │   └── ...
+        # └── ...
+        # ```
         
-        #### Option 2: Direct image files - Employee code from image filename
-        ```
-        Main.zip
-        ├── profile_image10177.jpg    # Employee code = 10177, Profile image
-        ├── signature10177.jpg        # Employee code = 10177, Signature image
-        ├── sign10177.jpg             # Employee code = 10177, Signature image
-        ├── profile10177.pdf          # Employee code = 10177, Profile (PDF)
-        ├── sign10178.pdf             # Employee code = 10178, Signature (PDF)
-        ├── profile_image10178.jpg    # Employee code = 10178, Profile image
-        ├── signature10178.jpg        # Employee code = 10178, Signature image
-        └── ...
-        ```
+        # #### Option 2: Direct image files - Employee code from image filename
+        # ```
+        # Main.zip
+        # ├── profile_image10177.jpg    # Employee code = 10177, Profile image
+        # ├── signature10177.jpg        # Employee code = 10177, Signature image
+        # ├── sign10177.jpg             # Employee code = 10177, Signature image
+        # ├── profile10177.pdf          # Employee code = 10177, Profile (PDF)
+        # ├── sign10178.pdf             # Employee code = 10178, Signature (PDF)
+        # ├── profile_image10178.jpg    # Employee code = 10178, Profile image
+        # ├── signature10178.jpg        # Employee code = 10178, Signature image
+        # └── ...
+        # ```
         
-        ### Important Notes:
+        # ### Important Notes:
         
-        1. For nested ZIP files, the employee code is taken directly from the ZIP filename
-        2. For direct images, the employee code is extracted from the image filename:
-           - Employee code can be at any position in the filename (e.g., `10177_profile.jpg`, `profile10177.jpg`, or `10177_employee_profile.jpg`)
-           - Employee code is recognized as a sequence of at least 4 digits
-           - Employee code can be at the beginning, middle, or before profile/signature keywords
-        3. The tool supports both image files (.jpg, .jpeg, .png, .jfif, etc.) and PDF files
-        4. The tool recognizes specific naming patterns:
-           - Profile images: files containing EXACTLY "profile" in their names (case insensitive)
-           - Signature images: files containing EITHER "signature" OR "sign" in their names (case insensitive)
-        5. PDF files will be automatically converted to images (first page only)
-        6. All extracted images are standardized to: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
-        7. File size limit is 5GB for the main ZIP file
-        """)
+        # 1. For nested ZIP files, the employee code is taken directly from the ZIP filename
+        # 2. For direct images, the employee code is extracted from the image filename:
+        #    - Employee code can be at any position in the filename (e.g., `10177_profile.jpg`, `profile10177.jpg`, or `10177_employee_profile.jpg`)
+        #    - Employee code is recognized as a sequence of at least 4 digits
+        #    - Employee code can be at the beginning, middle, or before profile/signature keywords
+        # 3. The tool supports both image files (.jpg, .jpeg, .png, .jfif, etc.) and PDF files
+        # 4. The tool recognizes specific naming patterns:
+        #    - Profile images: files containing EXACTLY "profile" in their names (case insensitive)
+        #    - Signature images: files containing EITHER "signature" OR "sign" in their names (case insensitive)
+        # 5. PDF files will be automatically converted to images (first page only)
+        # 6. All extracted images are standardized to: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
+        # 7. File size limit is 5GB for the main ZIP file
+        # """)
 
 
 # Function to convert PDF to image
