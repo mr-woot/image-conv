@@ -529,7 +529,7 @@ def adjust_image_size(
         # Image is too large, focus on reduction
         scale_min, scale_max = 0.1, 1.0
         quality_min, quality_max = 5, 95
-            else:
+    else:
         # Image is too small, focus on expansion or quality increase
         scale_min, scale_max = 1.0, 3.0
         quality_min, quality_max = 80, 100
@@ -629,7 +629,7 @@ def adjust_image_size(
 
         # Apply extreme techniques to increase file size
         # 1. Try maximum quality and no optimization
-            buffer = io.BytesIO()
+        buffer = io.BytesIO()
         if format_name.upper() in ["JPEG", "JPG"]:
             img.save(
                 buffer, format=format_name, quality=100, optimize=False, subsampling=0
@@ -638,8 +638,8 @@ def adjust_image_size(
             img.save(buffer, format=format_name, optimize=False)
 
         size = buffer.getbuffer().nbytes
-            if target_min <= size <= target_max:
-                return buffer.getvalue()
+        if target_min <= size <= target_max:
+            return buffer.getvalue()
                 
         # 2. Add padding if necessary
         if size < target_min:
@@ -655,7 +655,7 @@ def adjust_image_size(
 
                 if img.mode == "RGBA":
                     background.paste(img, paste_position, mask=img.split()[3])
-        else:
+                else:
                     background.paste(img, paste_position)
 
                 buffer = io.BytesIO()
@@ -672,13 +672,13 @@ def adjust_image_size(
                 elif size > target_max:
                     # If adding border made it too large, apply quality reduction
                     for q in [80, 60, 40, 20, 10]:
-            buffer = io.BytesIO()
+                        buffer = io.BytesIO()
                         background.save(
                             buffer, format=format_name, quality=q, optimize=True
                         )
-            size = buffer.getbuffer().nbytes
-            if target_min <= size <= target_max:
-                return buffer.getvalue()
+                        size = buffer.getbuffer().nbytes
+                        if target_min <= size <= target_max:
+                            return buffer.getvalue()
 
                     # If still too large, return to original approach
                     break
@@ -705,18 +705,18 @@ def adjust_image_size(
         # Try more aggressive quality reduction first
         if format_name.upper() in ["JPEG", "JPG"]:
             for quality in [30, 20, 10, 5, 1]:
-            buffer = io.BytesIO()
+                buffer = io.BytesIO()
                 img.save(buffer, format=format_name, quality=quality, optimize=True)
-            size = buffer.getbuffer().nbytes
+                size = buffer.getbuffer().nbytes
             
-            if target_min <= size <= target_max:
-                return buffer.getvalue()
+                if target_min <= size <= target_max:
+                    return buffer.getvalue()
                 elif size < target_min:
                     # If we went too small, try a slightly higher quality
                     for q in range(quality + 5, quality + 30, 5):
-    buffer = io.BytesIO()
+                        buffer = io.BytesIO()
                         img.save(buffer, format=format_name, quality=q, optimize=True)
-    size = buffer.getbuffer().nbytes
+                        size = buffer.getbuffer().nbytes
                         if target_min <= size <= target_max:
                             return buffer.getvalue()
                     # If we couldn't get back to target range, use classic force_maximum_size
@@ -890,7 +890,7 @@ def convert_image(
                     print(
                         f"Warning: File size too large ({file_size/1024:.2f} KB). Attempting reduction..."
                     )
-                if progress_callback:
+                    if progress_callback:
                         progress_callback(
                             f"Attempting to reduce excessive file size..."
                         )
