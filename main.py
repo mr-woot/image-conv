@@ -11,8 +11,36 @@ import zipfile
 import re
 import shutil
 import pandas as pd
-import PyPDF2
-from pdf2image import convert_from_bytes
+
+# Try to import PDF-related modules, falling back to None if they're not available
+try:
+    from pypdf import PdfReader  # New PyPDF2 is called pypdf
+    pdf_support = True
+except ImportError:
+    try:
+        import PyPDF2  # Fall back to old name
+        pdf_support = True
+    except ImportError:
+        pdf_support = False
+
+try:
+    from pdf2image import convert_from_bytes
+    pdf_image_support = True
+    
+    # Check if poppler is actually available by attempting a simple conversion
+    poppler_available = False
+    try:
+        # Create a minimal 1x1 PDF in memory
+        from io import BytesIO
+        import PIL.Image
+        blank_pdf = BytesIO(b'%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/MediaBox[0 0 1 1]>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n149\n%EOF\n')
+        convert_from_bytes(blank_pdf.getvalue(), dpi=72, first_page=1, last_page=1)
+        poppler_available = True
+    except Exception:
+        poppler_available = False
+except ImportError:
+    pdf_image_support = False
+    poppler_available = False
 
 # Configure Streamlit to allow larger file uploads (5000MB = 5GB)
 st.set_page_config(
@@ -996,9 +1024,9 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         for file in files:
                             file_lower = file.lower()
                             # Check for image files first
-                            if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp)$', file_lower):
+                            if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
                                 profile_img_path = os.path.join(root, file)
-                            elif re.search(r'sign(ature)?.*\.(jpg|jpeg|png|bmp|gif|webp)$', file_lower):
+                            elif re.search(r'sign(ature)?.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
                                 signature_img_path = os.path.join(root, file)
                     
                     # If image not found, look for PDF files
@@ -1027,17 +1055,25 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             
                             # Handle PDF conversion if needed
                             if profile_is_pdf:
-                                with open(profile_img_path, 'rb') as pdf_file:
-                                    pdf_bytes = pdf_file.read()
-                                try:
-                                    img = convert_pdf_to_image(pdf_bytes)
-                                except Exception as e:
+                                if not pdf_support or not pdf_image_support:
                                     results.append({
                                         "Employee Code": emp_code,
                                         "Image Type": "Profile (PDF)",
-                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                        "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
                                     })
                                     img = None
+                                else:
+                                    with open(profile_img_path, 'rb') as pdf_file:
+                                        pdf_bytes = pdf_file.read()
+                                    try:
+                                        img = convert_pdf_to_image(pdf_bytes)
+                                    except Exception as e:
+                                        results.append({
+                                            "Employee Code": emp_code,
+                                            "Image Type": "Profile (PDF)",
+                                            "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                        })
+                                        img = None
                             else:
                                 img = Image.open(profile_img_path)
                             
@@ -1077,17 +1113,25 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             
                             # Handle PDF conversion if needed
                             if signature_is_pdf:
-                                with open(signature_img_path, 'rb') as pdf_file:
-                                    pdf_bytes = pdf_file.read()
-                                try:
-                                    img = convert_pdf_to_image(pdf_bytes)
-                                except Exception as e:
+                                if not pdf_support or not pdf_image_support:
                                     results.append({
                                         "Employee Code": emp_code,
                                         "Image Type": "Signature (PDF)",
-                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                        "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
                                     })
                                     img = None
+                                else:
+                                    with open(signature_img_path, 'rb') as pdf_file:
+                                        pdf_bytes = pdf_file.read()
+                                    try:
+                                        img = convert_pdf_to_image(pdf_bytes)
+                                    except Exception as e:
+                                        results.append({
+                                            "Employee Code": emp_code,
+                                            "Image Type": "Signature (PDF)",
+                                            "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                        })
+                                        img = None
                             else:
                                 img = Image.open(signature_img_path)
                             
@@ -1147,7 +1191,7 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
             # Process image files
             for root, _, files in os.walk(extract_dir):
                 for file in files:
-                    if file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')):
+                    if file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.jfif')):
                         file_path = os.path.join(root, file)
                         file_lower = file.lower()
                         
@@ -1218,17 +1262,25 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         
                         # Handle PDF conversion if needed
                         if images['profile_is_pdf']:
-                            with open(images['profile'], 'rb') as pdf_file:
-                                pdf_bytes = pdf_file.read()
-                            try:
-                                img = convert_pdf_to_image(pdf_bytes)
-                            except Exception as e:
+                            if not pdf_support or not pdf_image_support:
                                 results.append({
                                     "Employee Code": emp_code,
                                     "Image Type": "Profile (PDF)",
-                                    "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                    "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
                                 })
                                 img = None
+                            else:
+                                with open(images['profile'], 'rb') as pdf_file:
+                                    pdf_bytes = pdf_file.read()
+                                try:
+                                    img = convert_pdf_to_image(pdf_bytes)
+                                except Exception as e:
+                                    results.append({
+                                        "Employee Code": emp_code,
+                                        "Image Type": "Profile (PDF)",
+                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                    })
+                                    img = None
                         else:
                             img = Image.open(images['profile'])
                         
@@ -1268,17 +1320,25 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         
                         # Handle PDF conversion if needed
                         if images['signature_is_pdf']:
-                            with open(images['signature'], 'rb') as pdf_file:
-                                pdf_bytes = pdf_file.read()
-                            try:
-                                img = convert_pdf_to_image(pdf_bytes)
-                            except Exception as e:
+                            if not pdf_support or not pdf_image_support:
                                 results.append({
                                     "Employee Code": emp_code,
                                     "Image Type": "Signature (PDF)",
-                                    "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                    "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
                                 })
                                 img = None
+                            else:
+                                with open(images['signature'], 'rb') as pdf_file:
+                                    pdf_bytes = pdf_file.read()
+                                try:
+                                    img = convert_pdf_to_image(pdf_bytes)
+                                except Exception as e:
+                                    results.append({
+                                        "Employee Code": emp_code,
+                                        "Image Type": "Signature (PDF)",
+                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                    })
+                                    img = None
                         else:
                             img = Image.open(images['signature'])
                         
@@ -1373,7 +1433,7 @@ def image_optimizer_page():
     uploaded_files = st.file_uploader(
         "Choose images to convert",
         accept_multiple_files=True,
-        type=["png", "jpg", "jpeg", "bmp", "webp"],
+        type=["png", "jpg", "jpeg", "bmp", "webp", "jfif"],
     )
 
     if uploaded_files:
@@ -1528,6 +1588,23 @@ def employee_image_processor_page():
         "Output Format", ["PNG", "JPEG", "WebP"], index=0
     )
     
+    # Show PDF support status
+    if not pdf_support or not pdf_image_support:
+        st.warning("PDF support is not available. The tool will only process image files. To enable PDF support, install 'pypdf' and 'pdf2image' packages.")
+    elif not poppler_available:
+        st.warning("""
+        **PDF support is partially available, but Poppler is missing.** 
+        
+        PDF files will not be processed correctly until you install Poppler:
+        - **Windows**: Download from [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases)
+        - **Mac**: Run `brew install poppler`
+        - **Linux**: Run `apt-get install poppler-utils` (Ubuntu/Debian) or equivalent for your distribution
+        
+        After installing Poppler, restart the application.
+        """)
+    else:
+        st.info("PDF support is enabled. The application will automatically convert PDF files to images.")
+    
     # Information about the tool
     st.markdown("""
     ### How it works:
@@ -1539,7 +1616,7 @@ def employee_image_processor_page():
     3. For nested ZIP files, the employee code is taken from the ZIP filename
     4. For direct images, the employee code is extracted from the image filename
     5. The tool extracts profile images and signature images based on filename patterns
-    6. PDF files with "profile" or "signature" in the name will be automatically converted to images
+    6. Supports various image formats including JPG, PNG, JFIF, and others; PDF files with "profile" or "signature" in the name will be automatically converted to images
     7. Files are renamed to a standardized format: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
     8. All processed images are packaged into a single ZIP file for download
     """)
@@ -1652,7 +1729,7 @@ def employee_image_processor_page():
         
         1. For nested ZIP files, the employee code is taken directly from the ZIP filename
         2. For direct images, the employee code is extracted from the image filename
-        3. The tool supports both image files (.jpg, .jpeg, .png, etc.) and PDF files
+        3. The tool supports both image files (.jpg, .jpeg, .png, .jfif, etc.) and PDF files
         4. The tool looks for any files containing "profile" or "sign"/"signature" in their names
         5. PDF files will be automatically converted to images (first page only)
         6. All extracted images are standardized to: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
@@ -1672,15 +1749,34 @@ def convert_pdf_to_image(pdf_bytes, dpi=200):
     Returns:
         PIL Image of the first page
     """
+    if not pdf_support or not pdf_image_support:
+        raise ImportError("PDF conversion requires both pypdf/PyPDF2 and pdf2image packages")
+        
     try:
         # Check if it's a valid PDF
         try:
-            PyPDF2.PdfReader(BytesIO(pdf_bytes))
-        except:
-            raise ValueError("Not a valid PDF file")
+            if 'PdfReader' in globals():
+                PdfReader(BytesIO(pdf_bytes))
+            else:
+                PyPDF2.PdfReader(BytesIO(pdf_bytes))
+        except Exception as e:
+            raise ValueError(f"Not a valid PDF file: {str(e)}")
             
         # Convert the PDF to images
-        images = convert_from_bytes(pdf_bytes, dpi=dpi)
+        try:
+            images = convert_from_bytes(pdf_bytes, dpi=dpi)
+        except Exception as e:
+            if "poppler" in str(e).lower():
+                raise Exception(
+                    "Poppler is not installed or not in PATH. "
+                    "This dependency is required for PDF conversion. "
+                    "Please install Poppler:\n"
+                    "- Windows: Download from https://github.com/oschwartz10612/poppler-windows/releases\n"
+                    "- Mac: brew install poppler\n"
+                    "- Linux (Ubuntu/Debian): apt-get install poppler-utils\n"
+                )
+            else:
+                raise
         
         # Return the first page as an image
         if images and len(images) > 0:

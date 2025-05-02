@@ -2,5 +2,5 @@ pillow>=9.0.0
 streamlit>=1.22.0
 numpy>=1.20.0
 pandas>=1.3.0
-pdf2image>=1.16.0
-PyPDF2>=2.0.0
+pdf2image>=1.16.0  # Requires poppler: https://pdf2image.readthedocs.io/en/latest/installation.html
+pypdf>=3.0.0
