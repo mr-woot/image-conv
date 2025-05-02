@@ -11,8 +11,10 @@ import zipfile
 import re
 import shutil
 import pandas as pd
+import PyPDF2
+from pdf2image import convert_from_bytes
 
-# Configure Streamlit to allow larger file uploads (500MB)
+# Configure Streamlit to allow larger file uploads (5000MB = 5GB)
 st.set_page_config(
     page_title="Image Processing Tools",
     page_icon="🖼️",
@@ -23,7 +25,7 @@ st.set_page_config(
 if not st.session_state.get("configured_upload_size"):
     import streamlit.config as stc
     
-    # Set max upload size to 500MB (value is in MB)
+    # Set max upload size to 5000MB (5GB)
     stc.set_option("server.maxUploadSize", 5000)
     st.session_state["configured_upload_size"] = True
 
@@ -984,43 +986,81 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                     with zipfile.ZipFile(emp_zip_path, 'r') as emp_zip:
                         emp_zip.extractall(emp_dir)
                     
-                    # Find profile and signature images
+                    # Find profile and signature images/pdfs
                     profile_img_path = None
                     signature_img_path = None
+                    profile_is_pdf = False
+                    signature_is_pdf = False
                     
                     for root, _, files in os.walk(emp_dir):
                         for file in files:
                             file_lower = file.lower()
+                            # Check for image files first
                             if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp)$', file_lower):
                                 profile_img_path = os.path.join(root, file)
                             elif re.search(r'sign(ature)?.*\.(jpg|jpeg|png|bmp|gif|webp)$', file_lower):
                                 signature_img_path = os.path.join(root, file)
+                    
+                    # If image not found, look for PDF files
+                    if not profile_img_path:
+                        for root, _, files in os.walk(emp_dir):
+                            for file in files:
+                                file_lower = file.lower()
+                                if re.search(r'profile.*\.pdf$', file_lower):
+                                    profile_img_path = os.path.join(root, file)
+                                    profile_is_pdf = True
+                                    break
+                    
+                    if not signature_img_path:
+                        for root, _, files in os.walk(emp_dir):
+                            for file in files:
+                                file_lower = file.lower()
+                                if re.search(r'sign(ature)?.*\.pdf$', file_lower):
+                                    signature_img_path = os.path.join(root, file)
+                                    signature_is_pdf = True
+                                    break
                             
                     # Process profile image if found
                     if profile_img_path:
                         try:
                             profile_output_name = f"{emp_code} P.{output_format.lower()}"
-                            img = Image.open(profile_img_path)
                             
-                            # Convert to RGB if necessary
-                            if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                                bg = Image.new('RGB', img.size, (255, 255, 255))
-                                bg.paste(img, mask=img.split()[3])
-                                img = bg
+                            # Handle PDF conversion if needed
+                            if profile_is_pdf:
+                                with open(profile_img_path, 'rb') as pdf_file:
+                                    pdf_bytes = pdf_file.read()
+                                try:
+                                    img = convert_pdf_to_image(pdf_bytes)
+                                except Exception as e:
+                                    results.append({
+                                        "Employee Code": emp_code,
+                                        "Image Type": "Profile (PDF)",
+                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                    })
+                                    img = None
+                            else:
+                                img = Image.open(profile_img_path)
                             
-                            # Save with the new format
-                            output_path = os.path.join(output_dir, profile_output_name)
-                            img.save(output_path, format=output_format.upper())
-                            
-                            results.append({
-                                "Employee Code": emp_code,
-                                "Image Type": "Profile",
-                                "Status": "✅ Success",
-                            })
+                            if img:
+                                # Convert to RGB if necessary
+                                if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
+                                    bg = Image.new('RGB', img.size, (255, 255, 255))
+                                    bg.paste(img, mask=img.split()[3])
+                                    img = bg
+                                
+                                # Save with the new format
+                                output_path = os.path.join(output_dir, profile_output_name)
+                                img.save(output_path, format=output_format.upper())
+                                
+                                results.append({
+                                    "Employee Code": emp_code,
+                                    "Image Type": "Profile" + (" (from PDF)" if profile_is_pdf else ""),
+                                    "Status": "✅ Success",
+                                })
                         except Exception as e:
                             results.append({
                                 "Employee Code": emp_code,
-                                "Image Type": "Profile",
+                                "Image Type": "Profile" + (" (from PDF)" if profile_is_pdf else ""),
                                 "Status": f"❌ Failed: {str(e)}",
                             })
                     else:
@@ -1034,27 +1074,43 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                     if signature_img_path:
                         try:
                             signature_output_name = f"{emp_code} S.{output_format.lower()}"
-                            img = Image.open(signature_img_path)
                             
-                            # Convert to RGB if necessary
-                            if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                                bg = Image.new('RGB', img.size, (255, 255, 255))
-                                bg.paste(img, mask=img.split()[3])
-                                img = bg
+                            # Handle PDF conversion if needed
+                            if signature_is_pdf:
+                                with open(signature_img_path, 'rb') as pdf_file:
+                                    pdf_bytes = pdf_file.read()
+                                try:
+                                    img = convert_pdf_to_image(pdf_bytes)
+                                except Exception as e:
+                                    results.append({
+                                        "Employee Code": emp_code,
+                                        "Image Type": "Signature (PDF)",
+                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                    })
+                                    img = None
+                            else:
+                                img = Image.open(signature_img_path)
                             
-                            # Save with the new format
-                            output_path = os.path.join(output_dir, signature_output_name)
-                            img.save(output_path, format=output_format.upper())
-                            
-                            results.append({
-                                "Employee Code": emp_code,
-                                "Image Type": "Signature",
-                                "Status": "✅ Success",
-                            })
+                            if img:
+                                # Convert to RGB if necessary
+                                if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
+                                    bg = Image.new('RGB', img.size, (255, 255, 255))
+                                    bg.paste(img, mask=img.split()[3])
+                                    img = bg
+                                
+                                # Save with the new format
+                                output_path = os.path.join(output_dir, signature_output_name)
+                                img.save(output_path, format=output_format.upper())
+                                
+                                results.append({
+                                    "Employee Code": emp_code,
+                                    "Image Type": "Signature" + (" (from PDF)" if signature_is_pdf else ""),
+                                    "Status": "✅ Success",
+                                })
                         except Exception as e:
                             results.append({
                                 "Employee Code": emp_code,
-                                "Image Type": "Signature",
+                                "Image Type": "Signature" + (" (from PDF)" if signature_is_pdf else ""),
                                 "Status": f"❌ Failed: {str(e)}",
                             })
                     else:
@@ -1087,6 +1143,8 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
             
             # First pass: find all image files and group by employee code from filename
             image_count = 0
+            
+            # Process image files
             for root, _, files in os.walk(extract_dir):
                 for file in files:
                     if file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')):
@@ -1100,7 +1158,8 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             
                             # Initialize entry for this employee if it doesn't exist
                             if emp_code not in employee_images:
-                                employee_images[emp_code] = {'profile': None, 'signature': None}
+                                employee_images[emp_code] = {'profile': None, 'signature': None, 
+                                                            'profile_is_pdf': False, 'signature_is_pdf': False}
                             
                             # Determine if it's a profile or signature image
                             if re.search(r'profile', file_lower):
@@ -1111,6 +1170,37 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             image_count += 1
                             if progress_callback and image_count % 10 == 0:
                                 progress_callback(f"Found {image_count} images...", 0.5)
+            
+            # Now search for PDF files where images weren't found
+            pdf_count = 0
+            for root, _, files in os.walk(extract_dir):
+                for file in files:
+                    if file.lower().endswith('.pdf'):
+                        file_path = os.path.join(root, file)
+                        file_lower = file.lower()
+                        
+                        # Try to extract employee code from the filename
+                        emp_code_match = re.search(r'(\d{4,})(?=\.|_)', file_lower)
+                        if emp_code_match:
+                            emp_code = emp_code_match.group(1)
+                            
+                            # Initialize entry for this employee if it doesn't exist
+                            if emp_code not in employee_images:
+                                employee_images[emp_code] = {'profile': None, 'signature': None, 
+                                                            'profile_is_pdf': False, 'signature_is_pdf': False}
+                            
+                            # Determine if it's a profile or signature pdf
+                            if re.search(r'profile', file_lower) and not employee_images[emp_code]['profile']:
+                                employee_images[emp_code]['profile'] = file_path
+                                employee_images[emp_code]['profile_is_pdf'] = True
+                                pdf_count += 1
+                            elif re.search(r'sign(ature)?', file_lower) and not employee_images[emp_code]['signature']:
+                                employee_images[emp_code]['signature'] = file_path
+                                employee_images[emp_code]['signature_is_pdf'] = True
+                                pdf_count += 1
+                                
+                            if progress_callback and pdf_count % 10 == 0:
+                                progress_callback(f"Found {pdf_count} PDF files...", 0.55)
             
             # Process grouped images
             if progress_callback:
@@ -1125,27 +1215,43 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                 if images['profile']:
                     try:
                         profile_output_name = f"{emp_code} P.{output_format.lower()}"
-                        img = Image.open(images['profile'])
                         
-                        # Convert to RGB if necessary
-                        if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                            bg = Image.new('RGB', img.size, (255, 255, 255))
-                            bg.paste(img, mask=img.split()[3])
-                            img = bg
+                        # Handle PDF conversion if needed
+                        if images['profile_is_pdf']:
+                            with open(images['profile'], 'rb') as pdf_file:
+                                pdf_bytes = pdf_file.read()
+                            try:
+                                img = convert_pdf_to_image(pdf_bytes)
+                            except Exception as e:
+                                results.append({
+                                    "Employee Code": emp_code,
+                                    "Image Type": "Profile (PDF)",
+                                    "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                })
+                                img = None
+                        else:
+                            img = Image.open(images['profile'])
                         
-                        # Save with the new format
-                        output_path = os.path.join(output_dir, profile_output_name)
-                        img.save(output_path, format=output_format.upper())
-                        
-                        results.append({
-                            "Employee Code": emp_code,
-                            "Image Type": "Profile",
-                            "Status": "✅ Success",
-                        })
+                        if img:
+                            # Convert to RGB if necessary
+                            if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
+                                bg = Image.new('RGB', img.size, (255, 255, 255))
+                                bg.paste(img, mask=img.split()[3])
+                                img = bg
+                            
+                            # Save with the new format
+                            output_path = os.path.join(output_dir, profile_output_name)
+                            img.save(output_path, format=output_format.upper())
+                            
+                            results.append({
+                                "Employee Code": emp_code,
+                                "Image Type": "Profile" + (" (from PDF)" if images['profile_is_pdf'] else ""),
+                                "Status": "✅ Success",
+                            })
                     except Exception as e:
                         results.append({
                             "Employee Code": emp_code,
-                            "Image Type": "Profile",
+                            "Image Type": "Profile" + (" (from PDF)" if images['profile_is_pdf'] else ""),
                             "Status": f"❌ Failed: {str(e)}",
                         })
                 else:
@@ -1159,27 +1265,43 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                 if images['signature']:
                     try:
                         signature_output_name = f"{emp_code} S.{output_format.lower()}"
-                        img = Image.open(images['signature'])
                         
-                        # Convert to RGB if necessary
-                        if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                            bg = Image.new('RGB', img.size, (255, 255, 255))
-                            bg.paste(img, mask=img.split()[3])
-                            img = bg
+                        # Handle PDF conversion if needed
+                        if images['signature_is_pdf']:
+                            with open(images['signature'], 'rb') as pdf_file:
+                                pdf_bytes = pdf_file.read()
+                            try:
+                                img = convert_pdf_to_image(pdf_bytes)
+                            except Exception as e:
+                                results.append({
+                                    "Employee Code": emp_code,
+                                    "Image Type": "Signature (PDF)",
+                                    "Status": f"❌ PDF Conversion Failed: {str(e)}",
+                                })
+                                img = None
+                        else:
+                            img = Image.open(images['signature'])
                         
-                        # Save with the new format
-                        output_path = os.path.join(output_dir, signature_output_name)
-                        img.save(output_path, format=output_format.upper())
-                        
-                        results.append({
-                            "Employee Code": emp_code,
-                            "Image Type": "Signature",
-                            "Status": "✅ Success",
-                        })
+                        if img:
+                            # Convert to RGB if necessary
+                            if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
+                                bg = Image.new('RGB', img.size, (255, 255, 255))
+                                bg.paste(img, mask=img.split()[3])
+                                img = bg
+                            
+                            # Save with the new format
+                            output_path = os.path.join(output_dir, signature_output_name)
+                            img.save(output_path, format=output_format.upper())
+                            
+                            results.append({
+                                "Employee Code": emp_code,
+                                "Image Type": "Signature" + (" (from PDF)" if images['signature_is_pdf'] else ""),
+                                "Status": "✅ Success",
+                            })
                     except Exception as e:
                         results.append({
                             "Employee Code": emp_code,
-                            "Image Type": "Signature",
+                            "Image Type": "Signature" + (" (from PDF)" if images['signature_is_pdf'] else ""),
                             "Status": f"❌ Failed: {str(e)}",
                         })
                 else:
@@ -1417,11 +1539,12 @@ def employee_image_processor_page():
     3. For nested ZIP files, the employee code is taken from the ZIP filename
     4. For direct images, the employee code is extracted from the image filename
     5. The tool extracts profile images and signature images based on filename patterns
-    6. Files are renamed to a standardized format: `{Employee-Code} Profile.png` and `{Employee-Code} Sign.png`
-    7. All processed images are packaged into a single ZIP file for download
+    6. PDF files with "profile" or "signature" in the name will be automatically converted to images
+    7. Files are renamed to a standardized format: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
+    8. All processed images are packaged into a single ZIP file for download
     """)
     
-    st.info("You can upload ZIP files up to 500MB in size.")
+    st.info("You can upload ZIP files up to 5GB in size.")
     
     # File uploader
     uploaded_zip = st.file_uploader(
@@ -1501,12 +1624,14 @@ def employee_image_processor_page():
         ├── 10177.zip    # Employee code = 10177
         │   ├── aadhar_card_back.jpg
         │   ├── aadhar_card_front.jpg
-        │   ├── profile_image.jpg
-        │   ├── signature.jpg
+        │   ├── profile_image.jpg    # Will be used for Profile image
+        │   ├── signature.jpg        # Will be used for Signature image
+        │   ├── profile.pdf          # Alternatively, PDFs are supported
+        │   ├── signature.pdf        # Alternatively, PDFs are supported
         │   └── ...
         ├── 10178.zip    # Employee code = 10178
-        │   ├── profile_image.jpg
-        │   ├── signature.jpg
+        │   ├── profile_image.jpg    # Will be used for Profile image
+        │   ├── signature.jpg        # Will be used for Signature image
         │   └── ...
         └── ...
         ```
@@ -1514,10 +1639,12 @@ def employee_image_processor_page():
         #### Option 2: Direct image files - Employee code from image filename
         ```
         Main.zip
-        ├── profile_image10177.jpg    # Employee code = 10177
-        ├── signature10177.jpg        # Employee code = 10177
-        ├── profile_image10178.jpg    # Employee code = 10178
-        ├── signature10178.jpg        # Employee code = 10178
+        ├── profile_image10177.jpg    # Employee code = 10177, Profile image
+        ├── signature10177.jpg        # Employee code = 10177, Signature image
+        ├── profile10177.pdf          # Employee code = 10177, Profile (PDF)
+        ├── sign10178.pdf             # Employee code = 10178, Signature (PDF)
+        ├── profile_image10178.jpg    # Employee code = 10178, Profile image
+        ├── signature10178.jpg        # Employee code = 10178, Signature image
         └── ...
         ```
         
@@ -1525,9 +1652,43 @@ def employee_image_processor_page():
         
         1. For nested ZIP files, the employee code is taken directly from the ZIP filename
         2. For direct images, the employee code is extracted from the image filename
-        3. The tool looks for any files containing "profile" or "sign"/"signature" in their names
-        4. All extracted images are standardized to: `{Employee-Code} P.{output_format.lower()}` and `{Employee-Code} S.{output_format.lower()}`
+        3. The tool supports both image files (.jpg, .jpeg, .png, etc.) and PDF files
+        4. The tool looks for any files containing "profile" or "sign"/"signature" in their names
+        5. PDF files will be automatically converted to images (first page only)
+        6. All extracted images are standardized to: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
+        7. File size limit is 5GB for the main ZIP file
         """)
+
+
+# Function to convert PDF to image
+def convert_pdf_to_image(pdf_bytes, dpi=200):
+    """
+    Convert a PDF file to a PIL Image
+    
+    Args:
+        pdf_bytes: PDF file as bytes
+        dpi: DPI for conversion (higher = better quality but larger size)
+        
+    Returns:
+        PIL Image of the first page
+    """
+    try:
+        # Check if it's a valid PDF
+        try:
+            PyPDF2.PdfReader(BytesIO(pdf_bytes))
+        except:
+            raise ValueError("Not a valid PDF file")
+            
+        # Convert the PDF to images
+        images = convert_from_bytes(pdf_bytes, dpi=dpi)
+        
+        # Return the first page as an image
+        if images and len(images) > 0:
+            return images[0]
+        else:
+            raise ValueError("Could not convert PDF to image")
+    except Exception as e:
+        raise Exception(f"PDF conversion error: {str(e)}")
 
 
 if __name__ == "__main__":
