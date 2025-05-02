@@ -7,6 +7,10 @@ import tempfile
 import numpy as np
 from io import BytesIO
 import streamlit as st
+import zipfile
+import re
+import shutil
+import pandas as pd
 
 
 def adapt_quality_for_size(
@@ -870,10 +874,218 @@ def convert_image(
         return False, None, 0
 
 
+def process_employee_images(uploaded_zip, output_format="PNG"):
+    """
+    Process a zip file containing employee image archives
+    
+    Args:
+        uploaded_zip: The uploaded parent zip file
+        output_format: The output format for the images (default: PNG)
+        
+    Returns:
+        BytesIO: ZIP buffer containing processed images with standard naming
+        list: Results of processing for display
+    """
+    results = []
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Save the uploaded zip file
+        parent_zip_path = os.path.join(temp_dir, "uploaded.zip")
+        with open(parent_zip_path, "wb") as f:
+            f.write(uploaded_zip.getbuffer())
+        
+        # Create extraction and output directories
+        extract_dir = os.path.join(temp_dir, "extracted")
+        output_dir = os.path.join(temp_dir, "output")
+        os.makedirs(extract_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Extract the parent zip file
+        with zipfile.ZipFile(parent_zip_path, 'r') as parent_zip:
+            parent_zip.extractall(extract_dir)
+        
+        # Process images in the root directory first - for cases where employee images are directly in the zip
+        for root, _, files in os.walk(extract_dir):
+            for file in files:
+                if file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp')):
+                    file_path = os.path.join(root, file)
+                    file_name = file.lower()
+                    
+                    # Try to extract employee code from the filename
+                    emp_code_match = re.search(r'(\d{4,})(?=\.|_)', file_name)
+                    if emp_code_match:
+                        emp_code = emp_code_match.group(1)
+                        try:
+                            # Determine if it's a profile or signature image
+                            if re.search(r'profile', file_name):
+                                output_name = f"{emp_code} Profile.{output_format.lower()}"
+                                img_type = "Profile"
+                            elif re.search(r'sign(ature)?', file_name):
+                                output_name = f"{emp_code} Sign.{output_format.lower()}"
+                                img_type = "Signature"
+                            else:
+                                # Skip other types of images
+                                continue
+                                
+                            # Process the image
+                            img = Image.open(file_path)
+                            
+                            # Convert to RGB if necessary
+                            if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
+                                bg = Image.new('RGB', img.size, (255, 255, 255))
+                                bg.paste(img, mask=img.split()[3])
+                                img = bg
+                            
+                            # Save with the new format
+                            output_path = os.path.join(output_dir, output_name)
+                            img.save(output_path, format=output_format.upper())
+                            
+                            results.append({
+                                "Employee Code": emp_code,
+                                "Image Type": img_type,
+                                "Status": "✅ Success",
+                            })
+                        except Exception as e:
+                            results.append({
+                                "Employee Code": emp_code,
+                                "Image Type": img_type if 'img_type' in locals() else "Unknown",
+                                "Status": f"❌ Failed: {str(e)}",
+                            })
+        
+        # Look for zip files in the extracted directory
+        employee_zips = []
+        for root, _, files in os.walk(extract_dir):
+            for file in files:
+                if file.lower().endswith('.zip'):
+                    employee_zips.append(os.path.join(root, file))
+        
+        # Process each employee zip file
+        for emp_zip_path in employee_zips:
+            try:
+                # Extract employee code from filename
+                emp_code = os.path.splitext(os.path.basename(emp_zip_path))[0]
+                
+                # Create a temporary directory for this employee's files
+                emp_dir = os.path.join(temp_dir, emp_code)
+                os.makedirs(emp_dir, exist_ok=True)
+                
+                # Extract the employee zip file
+                with zipfile.ZipFile(emp_zip_path, 'r') as emp_zip:
+                    emp_zip.extractall(emp_dir)
+                
+                # Find profile and signature images
+                profile_img_path = None
+                signature_img_path = None
+                
+                for root, _, files in os.walk(emp_dir):
+                    for file in files:
+                        if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp)$', file.lower()):
+                            profile_img_path = os.path.join(root, file)
+                        elif re.search(r'sign(ature)?.*\.(jpg|jpeg|png|bmp|gif|webp)$', file.lower()):
+                            signature_img_path = os.path.join(root, file)
+                        
+                # Process profile image if found
+                if profile_img_path:
+                    try:
+                        profile_output_name = f"{emp_code} Profile.{output_format.lower()}"
+                        img = Image.open(profile_img_path)
+                        
+                        # Convert to RGB if necessary
+                        if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
+                            bg = Image.new('RGB', img.size, (255, 255, 255))
+                            bg.paste(img, mask=img.split()[3])
+                            img = bg
+                        
+                        # Save with the new format
+                        output_path = os.path.join(output_dir, profile_output_name)
+                        img.save(output_path, format=output_format.upper())
+                        
+                        results.append({
+                            "Employee Code": emp_code,
+                            "Image Type": "Profile",
+                            "Status": "✅ Success",
+                        })
+                    except Exception as e:
+                        results.append({
+                            "Employee Code": emp_code,
+                            "Image Type": "Profile",
+                            "Status": f"❌ Failed: {str(e)}",
+                        })
+                else:
+                    results.append({
+                        "Employee Code": emp_code,
+                        "Image Type": "Profile",
+                        "Status": "❌ Not found",
+                    })
+                
+                # Process signature image if found
+                if signature_img_path:
+                    try:
+                        signature_output_name = f"{emp_code} Sign.{output_format.lower()}"
+                        img = Image.open(signature_img_path)
+                        
+                        # Convert to RGB if necessary
+                        if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
+                            bg = Image.new('RGB', img.size, (255, 255, 255))
+                            bg.paste(img, mask=img.split()[3])
+                            img = bg
+                        
+                        # Save with the new format
+                        output_path = os.path.join(output_dir, signature_output_name)
+                        img.save(output_path, format=output_format.upper())
+                        
+                        results.append({
+                            "Employee Code": emp_code,
+                            "Image Type": "Signature",
+                            "Status": "✅ Success",
+                        })
+                    except Exception as e:
+                        results.append({
+                            "Employee Code": emp_code,
+                            "Image Type": "Signature",
+                            "Status": f"❌ Failed: {str(e)}",
+                        })
+                else:
+                    results.append({
+                        "Employee Code": emp_code,
+                        "Image Type": "Signature",
+                        "Status": "❌ Not found",
+                    })
+            except Exception as e:
+                results.append({
+                    "Employee Code": os.path.splitext(os.path.basename(emp_zip_path))[0],
+                    "Image Type": "Processing",
+                    "Status": f"❌ Failed: {str(e)}",
+                })
+        
+        # Create a zip file with all processed images
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as output_zip:
+            for file in os.listdir(output_dir):
+                file_path = os.path.join(output_dir, file)
+                if os.path.isfile(file_path):
+                    with open(file_path, 'rb') as f:
+                        output_zip.writestr(file, f.read())
+    
+    return zip_buffer, results
+
+
 # Streamlit UI for the image converter
 def main():
-    st.set_page_config(page_title="Image Size Optimizer", page_icon="🖼️", layout="wide")
+    st.set_page_config(page_title="Image Processing Tools", page_icon="🖼️", layout="wide")
+    
+    # Create navigation sidebar
+    st.sidebar.title("Navigation")
+    app_mode = st.sidebar.radio("Choose the tool:", 
+                              ["Image Size Optimizer", "Employee Image Processor"])
+    
+    # Display the selected page
+    if app_mode == "Image Size Optimizer":
+        image_optimizer_page()
+    else:
+        employee_image_processor_page()
 
+def image_optimizer_page():
     st.title("Image Size Optimizer")
     st.subheader(
         "Convert and optimize images to meet file size requirements (50KB-100KB)"
@@ -996,9 +1208,6 @@ def main():
             # Create a table of results
             st.header("Conversion Results")
 
-            # Convert results to a DataFrame for better display
-            import pandas as pd
-
             results_df = pd.DataFrame(conversion_results)
             st.dataframe(results_df, use_container_width=True)
 
@@ -1007,9 +1216,6 @@ def main():
                 st.header("Download Options")
 
                 # Create a ZIP file for all converted images
-                import zipfile
-                from io import BytesIO
-
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                     for filename, file_bytes in converted_files.items():
@@ -1054,6 +1260,111 @@ def main():
         The app uses advanced techniques to reach target file sizes while maintaining the best possible image quality.
         """
         )
+
+def employee_image_processor_page():
+    st.title("Employee Image Processor")
+    st.subheader("Extract and standardize profile and signature images from employee archives")
+    
+    # Sidebar options
+    st.sidebar.header("Options")
+    output_format = st.sidebar.selectbox(
+        "Output Format", ["PNG", "JPEG", "WebP"], index=0
+    )
+    
+    # Information about the tool
+    st.markdown("""
+    ### How it works:
+    
+    1. Upload a **ZIP file** containing employee image files
+    2. The tool supports two organization methods:
+       - Individual employee ZIP archives named with employee codes (e.g., `10177.zip`)
+       - Direct image files with employee codes in their names (e.g., `profile_image10177.jpg`)
+    3. The tool extracts profile images and signature images based on filename patterns
+    4. Files are renamed to a standardized format: `{Employee-Code} Profile.png` and `{Employee-Code} Sign.png`
+    5. All processed images are packaged into a single ZIP file for download
+    """)
+    
+    # File uploader
+    uploaded_zip = st.file_uploader(
+        "Upload ZIP file containing employee archives", 
+        type=["zip"]
+    )
+    
+    if uploaded_zip:
+        with st.spinner("Processing employee images... This may take a while depending on the size and number of archives."):
+            # Process the uploaded ZIP file
+            try:
+                zip_buffer, results = process_employee_images(uploaded_zip, output_format)
+                
+                # Display results
+                st.success("Processing complete!")
+                
+                # Create a table of results
+                st.header("Processing Results")
+                results_df = pd.DataFrame(results)
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Offer the ZIP file for download
+                st.header("Download Processed Images")
+                st.download_button(
+                    label="Download All Processed Images as ZIP",
+                    data=zip_buffer.getvalue(),
+                    file_name=f"employee_images_{output_format.lower()}.zip",
+                    mime="application/zip",
+                )
+                
+                # Display summary
+                total_employees = len(set([r["Employee Code"] for r in results]))
+                successful_profiles = len([r for r in results if r["Image Type"] == "Profile" and "Success" in r["Status"]])
+                successful_signatures = len([r for r in results if r["Image Type"] == "Signature" and "Success" in r["Status"]])
+                
+                st.subheader("Summary")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Employees", total_employees)
+                with col2:
+                    st.metric("Profile Images", f"{successful_profiles}/{total_employees}")
+                with col3:
+                    st.metric("Signature Images", f"{successful_signatures}/{total_employees}")
+                
+            except Exception as e:
+                st.error(f"Error processing the ZIP file: {str(e)}")
+                st.info("Please make sure the uploaded file is a valid ZIP file containing employee archives.")
+    
+    # Help section
+    with st.expander("Need Help?"):
+        st.markdown("""
+        ### Expected Structure Options:
+        
+        #### Option 1: Nested ZIP files
+        ```
+        Main.zip
+        ├── 10177.zip
+        │   ├── aadhar_card_back10177.jpg
+        │   ├── aadhar_card_front10177.jpg
+        │   ├── profile_image10177.jpg
+        │   ├── signature10177.jpg
+        │   └── ...
+        ├── 10178.zip
+        │   ├── profile_image10178.jpg
+        │   ├── signature10178.jpg
+        │   └── ...
+        └── ...
+        ```
+        
+        #### Option 2: Direct image files
+        ```
+        Main.zip
+        ├── profile_image10177.jpg
+        ├── signature10177.jpg
+        ├── profile_image10178.jpg
+        ├── signature10178.jpg
+        └── ...
+        ```
+        
+        The tool will search for any files containing "profile" or "sign"/"signature" in their names,
+        and extract the employee code from the filename (it looks for a sequence of 4 or more digits).
+        """)
 
 
 if __name__ == "__main__":
