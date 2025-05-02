@@ -1,0 +1,21 @@
+[server]
+maxUploadSize = 5000
+maxMessageSize = 1000
+enableXsrfProtection = false
+enableCORS = false
+headless = true
+port = 8501
+enableWebsocketCompression = true
+timeout = 3600
+connectionTimeout = 3600
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[theme]
+primaryColor = "#1E88E5"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif" 

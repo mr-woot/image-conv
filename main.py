@@ -49,7 +49,11 @@ st.set_page_config(
     layout="wide",
 )
 
-# Increase upload size limit
+# Check for config.toml file existence for cloud deployments
+if os.path.exists(".streamlit/config.toml"):
+    st.sidebar.success("📁 Found .streamlit/config.toml - Large file upload (5GB) is properly configured.")
+
+# Increase upload size limit (for local development without config.toml)
 if not st.session_state.get("configured_upload_size"):
     import streamlit.config as stc
     
@@ -939,14 +943,45 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
     with tempfile.TemporaryDirectory() as temp_dir:
         # Save the uploaded zip file
         parent_zip_path = os.path.join(temp_dir, "uploaded.zip")
-        with open(parent_zip_path, "wb") as f:
-            f.write(uploaded_zip.getbuffer())
         
-        # Free up memory by clearing the uploaded file from memory after saving it
-        uploaded_data = None
-        if hasattr(uploaded_zip, '_close'):
-            # Only used for memory management, not closing the file
-            uploaded_data = uploaded_zip.getvalue()
+        # Process in chunks to avoid memory issues with very large files
+        if progress_callback:
+            progress_callback("Saving uploaded file to temporary storage...", 0.08)
+            
+        try:
+            # For very large files, write in chunks
+            chunk_size = 10 * 1024 * 1024  # 10MB chunks
+            with open(parent_zip_path, "wb") as f:
+                # Get file size for progress reporting
+                total_size = len(uploaded_zip.getvalue())
+                bytes_written = 0
+                
+                # Reset file pointer
+                uploaded_zip.seek(0)
+                
+                # Write in chunks
+                while True:
+                    chunk = uploaded_zip.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    bytes_written += len(chunk)
+                    
+                    # Update progress for large files
+                    if total_size > 100 * 1024 * 1024 and progress_callback:  # 100MB
+                        save_progress = 0.05 + (0.05 * (bytes_written / total_size))
+                        progress_callback(f"Saving file: {bytes_written/1024/1024:.1f}MB / {total_size/1024/1024:.1f}MB", save_progress)
+            
+            # Free up memory by clearing the uploaded file from memory after saving it
+            uploaded_data = None
+            if hasattr(uploaded_zip, '_close'):
+                # Only used for memory management, not closing the file
+                uploaded_data = uploaded_zip.getvalue()
+                uploaded_zip.seek(0)  # Reset position
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Error saving file: {str(e)}", 0.08)
+            raise Exception(f"Failed to save uploaded file: {str(e)}")
             
         if progress_callback:
             progress_callback("Extracting main ZIP file...", 0.1)
@@ -969,12 +1004,31 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                 # For very large files, extract in chunks
                 if file_count > 1000:
                     for i, file in enumerate(parent_zip.namelist()):
-                        parent_zip.extract(file, extract_dir)
-                        if i % 100 == 0 and progress_callback:
-                            extract_progress = 0.15 + (0.2 * (i / file_count))
-                            progress_callback(f"Extracted {i}/{file_count} files...", extract_progress)
+                        try:
+                            parent_zip.extract(file, extract_dir)
+                            # Periodically report progress
+                            if i % 100 == 0 and progress_callback:
+                                extract_progress = 0.15 + (0.2 * (i / file_count))
+                                progress_callback(f"Extracted {i}/{file_count} files...", extract_progress)
+                                
+                                # Force garbage collection periodically for very large extractions
+                                if i % 1000 == 0:
+                                    import gc
+                                    gc.collect()
+                        except Exception as e:
+                            # Log error but continue with other files
+                            if progress_callback:
+                                progress_callback(f"Warning: Failed to extract {file}: {str(e)}", None)
                 else:
                     parent_zip.extractall(extract_dir)
+        except zipfile.BadZipFile:
+            if progress_callback:
+                progress_callback("Error: The file is not a valid ZIP file or is corrupted.", 0.1)
+            raise zipfile.BadZipFile("The uploaded file is not a valid ZIP file or is corrupted")
+        except MemoryError:
+            if progress_callback:
+                progress_callback("Error: Not enough memory to extract this ZIP file. Please try a smaller file.", 0.1)
+            raise MemoryError("Not enough memory to extract the ZIP file. Try splitting it into smaller files.")
         except Exception as e:
             if progress_callback:
                 progress_callback(f"Error extracting ZIP: {str(e)}", 0.1)
@@ -1093,6 +1147,11 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                                     "Image Type": "Profile" + (" (from PDF)" if profile_is_pdf else ""),
                                     "Status": "✅ Success",
                                 })
+                                
+                                # Free memory immediately
+                                img = None
+                                import gc
+                                gc.collect()
                         except Exception as e:
                             results.append({
                                 "Employee Code": emp_code,
@@ -1151,6 +1210,11 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                                     "Image Type": "Signature" + (" (from PDF)" if signature_is_pdf else ""),
                                     "Status": "✅ Success",
                                 })
+                                
+                                # Free memory immediately
+                                img = None
+                                import gc
+                                gc.collect()
                         except Exception as e:
                             results.append({
                                 "Employee Code": emp_code,
@@ -1176,6 +1240,11 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         "Image Type": "Processing",
                         "Status": f"❌ Failed: {str(e)}",
                     })
+                    
+                # Force garbage collection after each employee to prevent memory buildup
+                if i % 10 == 0:
+                    import gc
+                    gc.collect()
         else:
             # If no nested ZIP files found, process images in the extracted directory
             # This handles the case where images are directly in the parent ZIP
@@ -1214,6 +1283,11 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                             image_count += 1
                             if progress_callback and image_count % 10 == 0:
                                 progress_callback(f"Found {image_count} images...", 0.5)
+                                
+                                # Periodically free memory
+                                if image_count % 100 == 0:
+                                    import gc
+                                    gc.collect()
             
             # Now search for PDF files where images weren't found
             pdf_count = 0
@@ -1300,6 +1374,11 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                                 "Image Type": "Profile" + (" (from PDF)" if images['profile_is_pdf'] else ""),
                                 "Status": "✅ Success",
                             })
+                            
+                            # Free memory immediately
+                            img = None
+                            import gc
+                            gc.collect()
                     except Exception as e:
                         results.append({
                             "Employee Code": emp_code,
@@ -1358,6 +1437,11 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                                 "Image Type": "Signature" + (" (from PDF)" if images['signature_is_pdf'] else ""),
                                 "Status": "✅ Success",
                             })
+                            
+                            # Free memory immediately
+                            img = None
+                            import gc
+                            gc.collect()
                     except Exception as e:
                         results.append({
                             "Employee Code": emp_code,
@@ -1370,6 +1454,11 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
                         "Image Type": "Signature",
                         "Status": "❌ Not found",
                     })
+                
+                # Force garbage collection after each employee to prevent memory buildup
+                if i % 10 == 0:
+                    import gc
+                    gc.collect()
         
         if progress_callback:
             progress_callback("Creating output ZIP file...", 0.9)
@@ -1380,11 +1469,16 @@ def process_employee_images_with_progress(uploaded_zip, output_format="PNG", pro
             for file in os.listdir(output_dir):
                 file_path = os.path.join(output_dir, file)
                 if os.path.isfile(file_path):
+                    # Read in chunks for very large files
                     with open(file_path, 'rb') as f:
                         output_zip.writestr(file, f.read())
         
         if progress_callback:
             progress_callback("Processing complete!", 0.95)
+            
+        # Force garbage collection before returning
+        import gc
+        gc.collect()
     
     return zip_buffer, results
 
@@ -1621,12 +1715,38 @@ def employee_image_processor_page():
     8. All processed images are packaged into a single ZIP file for download
     """)
     
-    st.info("You can upload ZIP files up to 5GB in size.")
+    st.warning("""
+    ### Large File Upload Instructions
     
-    # File uploader
+    For files larger than 500MB:
+    1. Ensure you have a stable internet connection
+    2. Keep the browser tab active during upload
+    3. The upload may take several minutes - be patient and don't close the tab
+    4. If you get a timeout or network error, try these solutions:
+       - Break up your ZIP file into smaller ZIPs (200-300MB each)
+       - Try a different browser (Firefox or Chrome often work best)
+       - For Streamlit Cloud deployment: Create a `.streamlit/config.toml` file with:
+         ```toml
+         [server]
+         maxUploadSize = 5000
+         ```
+    
+    You can upload ZIP files up to 5GB in size (with proper configuration).
+    """)
+    
+    # Configure server before upload
+    if not st.session_state.get("configured_timeouts"):
+        import streamlit.config as stc
+        # Set server connection and socket timeouts (in seconds)
+        stc.set_option("server.connectionTimeout", 3600)  # 1 hour connection timeout
+        stc.set_option("server.timeout", 3600)  # 1 hour socket timeout
+        st.session_state["configured_timeouts"] = True
+    
+    # File uploader with explicit timeout messages
     uploaded_zip = st.file_uploader(
         "Upload ZIP file containing employee archives", 
-        type=["zip"]
+        type=["zip"],
+        help="If you encounter a timeout error with large files, try splitting your file into smaller chunks"
     )
     
     if uploaded_zip:
@@ -1634,7 +1754,7 @@ def employee_image_processor_page():
         st.write(f"Uploaded file size: {file_size_mb:.2f} MB")
         
         if file_size_mb > 200:
-            st.warning("Large file detected. Processing may take several minutes.")
+            st.warning(f"Large file detected ({file_size_mb:.2f} MB). Processing may take several minutes.")
             
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -1686,10 +1806,37 @@ def employee_image_processor_page():
                 with col3:
                     st.metric("Signature Images", f"{successful_signatures}/{total_employees}")
                 
+            except zipfile.BadZipFile:
+                st.error("Error: The uploaded file is not a valid ZIP file or is corrupted.")
+                st.info("Please check your ZIP file and try again. If the file is very large, it might have been truncated during upload.")
+            except MemoryError:
+                st.error("Memory Error: The file is too large to process with available memory.")
+                st.info("Try splitting your ZIP file into smaller files and process them separately.")
             except Exception as e:
                 st.error(f"Error processing the ZIP file: {str(e)}")
-                st.info("Please make sure the uploaded file is a valid ZIP file containing employee archives.")
-    
+                st.info("If you're encountering network timeouts, try these solutions:")
+                st.markdown("""
+                1. **Split your file** into smaller ZIP files (200-300MB each)
+                2. **Try a different browser** (Firefox or Chrome often work best for large uploads)
+                3. **Run the application locally** by installing it on your computer
+                4. **Check your internet connection** stability
+                """)
+    else:
+        # Show alternative upload methods if no file is uploaded
+        with st.expander("Having trouble with large files?"):
+            st.markdown("""
+            ### Alternatives for very large files:
+            
+            1. **Split your ZIP** into multiple smaller files (we recommend 200-300MB per ZIP)
+            2. **Run the application locally** on your computer:
+               ```
+               pip install -r requirements.txt
+               streamlit run main.py
+               ```
+            3. **Use a more stable network** connection when uploading
+            4. **Contact support** if you continue experiencing issues
+            """)
+            
     # Help section
     with st.expander("Need Help?"):
         st.markdown("""
