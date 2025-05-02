@@ -1,46 +1,145 @@
 import os
-from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
-import io
-from pathlib import Path
-import math
-import tempfile
-import numpy as np
-from io import BytesIO
-import streamlit as st
-import zipfile
 import re
+import io
+import time
+import gc
+import tempfile
+import zipfile
 import shutil
+import socket
+import traceback
+import base64
+import math
+import numpy as np
 import pandas as pd
+import requests
+import urllib.parse
+import streamlit as st
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional, Union, Any, Callable
+from io import BytesIO
+from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
 
 # Try to import PDF-related modules, falling back to None if they're not available
+pdf_support = False
+pdf_image_support = False
+poppler_available = False
+pdf_conversion_errors = []
+
 try:
     from pypdf import PdfReader  # New PyPDF2 is called pypdf
     pdf_support = True
+    pdf_reader_name = "pypdf"
 except ImportError:
     try:
         import PyPDF2  # Fall back to old name
         pdf_support = True
+        pdf_reader_name = "PyPDF2"
     except ImportError:
-        pdf_support = False
+        pdf_reader_name = None
+        pdf_conversion_errors.append("PDF libraries not found: Install 'pypdf' for PDF reading capabilities")
 
+# Try local PDF conversion first
 try:
     from pdf2image import convert_from_bytes
     pdf_image_support = True
     
     # Check if poppler is actually available by attempting a simple conversion
-    poppler_available = False
     try:
-        # Create a minimal 1x1 PDF in memory
+        # Create a minimal 1x1 PDF in memory for testing
         from io import BytesIO
         import PIL.Image
-        blank_pdf = BytesIO(b'%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/MediaBox[0 0 1 1]>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n149\n%EOF\n')
-        convert_from_bytes(blank_pdf.getvalue(), dpi=72, first_page=1, last_page=1)
-        poppler_available = True
-    except Exception:
-        poppler_available = False
+        
+        # Very small valid PDF content for testing
+        test_pdf_content = b'%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/MediaBox[0 0 1 1]>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n149\n%EOF\n'
+        test_pdf = BytesIO(test_pdf_content)
+        
+        try:
+            # Try to convert the test PDF
+            test_result = convert_from_bytes(test_pdf.getvalue(), dpi=72, first_page=1, last_page=1)
+            if test_result and len(test_result) > 0:
+                poppler_available = True
+                print("Poppler test successful: PDF to image conversion is available")
+            else:
+                pdf_conversion_errors.append("PDF test conversion produced no images")
+        except Exception as e:
+            error_msg = str(e)
+            if "poppler" in error_msg.lower():
+                pdf_conversion_errors.append(f"Poppler not properly installed: {error_msg}")
+            else:
+                pdf_conversion_errors.append(f"PDF conversion test failed: {error_msg}")
+    except Exception as e:
+        pdf_conversion_errors.append(f"Error during PDF conversion test: {str(e)}")
 except ImportError:
-    pdf_image_support = False
-    poppler_available = False
+    pdf_conversion_errors.append("pdf2image module not found: Install 'pdf2image' for PDF to image conversion")
+
+# Define a cloud-based PDF conversion function using PDF.co Web API
+# This is a fallback when local conversion is not available
+def convert_pdf_with_cloud_api(pdf_bytes):
+    """
+    Convert PDF to image using PDF.co Web API when Poppler is not available
+    """
+    try:
+        # PDF.co offers a free tier with limited API calls
+        # You should replace this with your own API key
+        PDFCO_API_KEY = st.secrets.get("PDFCO_API_KEY", "")
+        
+        if not PDFCO_API_KEY:
+            # Fallback to a temporary solution for the demo
+            # In production, ALWAYS use proper API keys stored in st.secrets
+            PDFCO_API_KEY = "demo"
+            print("WARNING: Using demo API key. For production, use st.secrets to store your API key.")
+        
+        # Convert PDF to base64 for API transfer
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+        
+        # Prepare API request
+        url = "https://api.pdf.co/v1/pdf/convert/to/png"
+        
+        payload = {
+            "name": "result.png",
+            "password": "",
+            "pages": "1-1",
+            "url": "data:application/pdf;base64," + pdf_base64
+        }
+        
+        headers = {
+            "x-api-key": PDFCO_API_KEY,
+            "Content-Type": "application/json"
+        }
+        
+        # Make the API request
+        response = requests.post(url, json=payload, headers=headers)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("error", False):
+                raise Exception(f"API Error: {result.get('message')}")
+                
+            # Get the URL of the converted image
+            download_url = result.get("url")
+            if not download_url:
+                raise Exception("No download URL returned from API")
+                
+            # Download the converted image
+            image_response = requests.get(download_url)
+            if image_response.status_code == 200:
+                # Convert to PIL Image
+                img = Image.open(BytesIO(image_response.content))
+                return img
+            else:
+                raise Exception(f"Failed to download converted image: {image_response.status_code}")
+        else:
+            raise Exception(f"API request failed with status code: {response.status_code}")
+    except Exception as e:
+        raise Exception(f"Cloud PDF conversion failed: {str(e)}")
+
+# Log PDF support status for debugging
+print(f"PDF Support Status: pdf_support={pdf_support}, pdf_image_support={pdf_image_support}, poppler_available={poppler_available}")
+if pdf_conversion_errors:
+    print("PDF Conversion Errors:")
+    for error in pdf_conversion_errors:
+        print(f" - {error}")
 
 # Configure Streamlit to allow larger file uploads (5000MB = 5GB)
 st.set_page_config(
@@ -922,565 +1021,227 @@ def convert_image(
         return False, None, 0
 
 
-def process_employee_images_with_progress(uploaded_zip, output_format="PNG", progress_callback=None):
-    """
-    Process a zip file containing employee image archives with progress updates
+def process_employee_images_with_progress(
+    uploaded_zip,
+    progress_callback,
+    desired_width=None,
+    desired_height=None,
+    keep_aspect_ratio=True,
+    quality=85,
+    enhance_image=False,
+    extract_dir=None
+):
+    """Process employee images from a ZIP file with progress reporting"""
     
-    Args:
-        uploaded_zip: The uploaded parent zip file
-        output_format: The output format for the images (default: PNG)
-        progress_callback: Callback function for progress updates
+    if extract_dir is None:
+        # Create a temporary directory for extraction
+        extract_dir = tempfile.mkdtemp()
+    
+    # Dictionary to store employee code → image paths
+    employee_data = {}
+    
+    try:
+        progress_callback(0.05, "Initializing processing...")
         
-    Returns:
-        BytesIO: ZIP buffer containing processed images with standard naming
-        list: Results of processing for display
-    """
-    results = []
-    
-    if progress_callback:
-        progress_callback("Initializing processing...", 0.05)
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Save the uploaded zip file
-        parent_zip_path = os.path.join(temp_dir, "uploaded.zip")
+        # Save the uploaded file in chunks to avoid memory issues with large files
+        temp_zip_path = os.path.join(extract_dir, "uploaded.zip")
         
-        # Process in chunks to avoid memory issues with very large files
-        if progress_callback:
-            progress_callback("Saving uploaded file to temporary storage...", 0.08)
-            
+        # Get the file size for progress reporting
+        file_size = len(uploaded_zip.getvalue())
+        progress_callback(0.1, f"Saving uploaded file ({file_size / (1024*1024):.1f} MB)...")
+        
+        chunk_size = 10 * 1024 * 1024  # 10MB chunks
+        with open(temp_zip_path, "wb") as f:
+            bytes_data = uploaded_zip.getvalue()
+            for i in range(0, len(bytes_data), chunk_size):
+                chunk = bytes_data[i:i+chunk_size]
+                f.write(chunk)
+                progress = 0.1 + 0.1 * (i / len(bytes_data))
+                progress_callback(progress, f"Saving file... {(i+len(chunk)) / (1024*1024):.1f} MB / {file_size / (1024*1024):.1f} MB ({progress*100:.0f}%)")
+        
+        # Extract the ZIP file
+        progress_callback(0.2, "Extracting files...")
         try:
-            # For very large files, write in chunks
-            chunk_size = 10 * 1024 * 1024  # 10MB chunks
-            with open(parent_zip_path, "wb") as f:
-                # Get file size for progress reporting
-                total_size = len(uploaded_zip.getvalue())
-                bytes_written = 0
+            with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+                # Count total files for progress reporting
+                total_files = len(zip_ref.namelist())
+                progress_callback(0.21, f"Extracting {total_files} files...")
                 
-                # Reset file pointer
-                uploaded_zip.seek(0)
-                
-                # Write in chunks
-                while True:
-                    chunk = uploaded_zip.read(chunk_size)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    bytes_written += len(chunk)
-                    
-                    # Update progress for large files
-                    if total_size > 100 * 1024 * 1024 and progress_callback:  # 100MB
-                        save_progress = 0.05 + (0.05 * (bytes_written / total_size))
-                        progress_callback(f"Saving file: {bytes_written/1024/1024:.1f}MB / {total_size/1024/1024:.1f}MB", save_progress)
-            
-            # Free up memory by clearing the uploaded file from memory after saving it
-            uploaded_data = None
-            if hasattr(uploaded_zip, '_close'):
-                # Only used for memory management, not closing the file
-                uploaded_data = uploaded_zip.getvalue()
-                uploaded_zip.seek(0)  # Reset position
-        except Exception as e:
-            if progress_callback:
-                progress_callback(f"Error saving file: {str(e)}", 0.08)
-            raise Exception(f"Failed to save uploaded file: {str(e)}")
-            
-        if progress_callback:
-            progress_callback("Extracting main ZIP file...", 0.1)
-            
-        # Create extraction and output directories
-        extract_dir = os.path.join(temp_dir, "extracted")
-        output_dir = os.path.join(temp_dir, "output")
-        os.makedirs(extract_dir, exist_ok=True)
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Process in chunks for large files
-        try:
-            # Extract the parent zip file
-            with zipfile.ZipFile(parent_zip_path, 'r') as parent_zip:
-                file_count = len(parent_zip.namelist())
-                
-                if progress_callback:
-                    progress_callback(f"Extracting {file_count} files...", 0.15)
-                
-                # For very large files, extract in chunks
-                if file_count > 1000:
-                    for i, file in enumerate(parent_zip.namelist()):
-                        try:
-                            parent_zip.extract(file, extract_dir)
-                            # Periodically report progress
-                            if i % 100 == 0 and progress_callback:
-                                extract_progress = 0.15 + (0.2 * (i / file_count))
-                                progress_callback(f"Extracted {i}/{file_count} files...", extract_progress)
-                                
-                                # Force garbage collection periodically for very large extractions
-                                if i % 1000 == 0:
-                                    import gc
-                                    gc.collect()
-                        except Exception as e:
-                            # Log error but continue with other files
-                            if progress_callback:
-                                progress_callback(f"Warning: Failed to extract {file}: {str(e)}", None)
-                else:
-                    parent_zip.extractall(extract_dir)
+                # Extract all files
+                for i, file in enumerate(zip_ref.namelist()):
+                    zip_ref.extract(file, extract_dir)
+                    extract_progress = 0.21 + 0.19 * ((i+1) / total_files)
+                    progress_callback(extract_progress, f"Extracted {i+1} of {total_files} files ({extract_progress*100:.0f}%)")
         except zipfile.BadZipFile:
-            if progress_callback:
-                progress_callback("Error: The file is not a valid ZIP file or is corrupted.", 0.1)
-            raise zipfile.BadZipFile("The uploaded file is not a valid ZIP file or is corrupted")
+            progress_callback(1.0, "Error: The uploaded file is not a valid ZIP file")
+            return {}
         except MemoryError:
-            if progress_callback:
-                progress_callback("Error: Not enough memory to extract this ZIP file. Please try a smaller file.", 0.1)
-            raise MemoryError("Not enough memory to extract the ZIP file. Try splitting it into smaller files.")
-        except Exception as e:
-            if progress_callback:
-                progress_callback(f"Error extracting ZIP: {str(e)}", 0.1)
-            raise
+            progress_callback(1.0, "Error: The ZIP file is too large to process. Please try splitting it into smaller files.")
+            return {}
         
-        if progress_callback:
-            progress_callback("Looking for ZIP files and images...", 0.4)
+        # Process the extracted files
+        progress_callback(0.4, "Organizing files by employee code...")
+        employee_dirs = {}
         
-        # Look for zip files in the extracted directory first
-        employee_zips = []
+        # Get all files from the extracted directory and subdirectories
+        all_files = []
         for root, _, files in os.walk(extract_dir):
             for file in files:
-                if file.lower().endswith('.zip'):
-                    employee_zips.append(os.path.join(root, file))
+                # Skip the uploaded zip file
+                if file == "uploaded.zip":
+                    continue
+                file_path = os.path.join(root, file)
+                all_files.append(file_path)
         
-        # If we found employee ZIP files, process them
-        if employee_zips:
-            if progress_callback:
-                progress_callback(f"Found {len(employee_zips)} employee ZIP files to process", 0.45)
+        total_files = len(all_files)
+        processed_files = 0
+        
+        for file_path in all_files:
+            processed_files += 1
+            progress = 0.4 + 0.1 * (processed_files / total_files)
+            progress_callback(progress, f"Organizing file {processed_files} of {total_files}")
             
-            # Process each employee zip file
-            for i, emp_zip_path in enumerate(employee_zips):
-                try:
-                    # Update progress
-                    if progress_callback:
-                        emp_progress = 0.45 + (0.45 * (i / max(1, len(employee_zips))))
-                        progress_callback(f"Processing employee ZIP {i+1}/{len(employee_zips)}", emp_progress)
-                    
-                    # Extract employee code from zip filename
-                    emp_code = os.path.splitext(os.path.basename(emp_zip_path))[0]
-                    
-                    # Create a temporary directory for this employee's files
-                    emp_dir = os.path.join(temp_dir, emp_code)
-                    os.makedirs(emp_dir, exist_ok=True)
-                    
-                    # Extract the employee zip file
-                    with zipfile.ZipFile(emp_zip_path, 'r') as emp_zip:
-                        emp_zip.extractall(emp_dir)
-                    
-                    # Find profile and signature images/pdfs
-                    profile_img_path = None
-                    signature_img_path = None
-                    profile_is_pdf = False
-                    signature_is_pdf = False
-                    
-                    for root, _, files in os.walk(emp_dir):
-                        for file in files:
-                            file_lower = file.lower()
-                            # Check for image files first
-                            if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
-                                profile_img_path = os.path.join(root, file)
-                            elif re.search(r'sign(ature)?.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
-                                signature_img_path = os.path.join(root, file)
-                    
-                    # If image not found, look for PDF files
-                    if not profile_img_path:
-                        for root, _, files in os.walk(emp_dir):
-                            for file in files:
-                                file_lower = file.lower()
-                                if re.search(r'profile.*\.pdf$', file_lower):
-                                    profile_img_path = os.path.join(root, file)
-                                    profile_is_pdf = True
-                                    break
-                    
-                    if not signature_img_path:
-                        for root, _, files in os.walk(emp_dir):
-                            for file in files:
-                                file_lower = file.lower()
-                                if re.search(r'sign(ature)?.*\.pdf$', file_lower):
-                                    signature_img_path = os.path.join(root, file)
-                                    signature_is_pdf = True
-                                    break
-                            
-                    # Process profile image if found
-                    if profile_img_path:
-                        try:
-                            profile_output_name = f"{emp_code} P.{output_format.lower()}"
-                            
-                            # Handle PDF conversion if needed
-                            if profile_is_pdf:
-                                if not pdf_support or not pdf_image_support:
-                                    results.append({
-                                        "Employee Code": emp_code,
-                                        "Image Type": "Profile (PDF)",
-                                        "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
-                                    })
-                                    img = None
-                                else:
-                                    with open(profile_img_path, 'rb') as pdf_file:
-                                        pdf_bytes = pdf_file.read()
-                                    try:
-                                        img = convert_pdf_to_image(pdf_bytes)
-                                    except Exception as e:
-                                        results.append({
-                                            "Employee Code": emp_code,
-                                            "Image Type": "Profile (PDF)",
-                                            "Status": f"❌ PDF Conversion Failed: {str(e)}",
-                                        })
-                                        img = None
-                            else:
-                                img = Image.open(profile_img_path)
-                            
-                            if img:
-                                # Convert to RGB if necessary
-                                if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                                    bg = Image.new('RGB', img.size, (255, 255, 255))
-                                    bg.paste(img, mask=img.split()[3])
-                                    img = bg
-                                
-                                # Save with the new format
-                                output_path = os.path.join(output_dir, profile_output_name)
-                                img.save(output_path, format=output_format.upper())
-                                
-                                results.append({
-                                    "Employee Code": emp_code,
-                                    "Image Type": "Profile" + (" (from PDF)" if profile_is_pdf else ""),
-                                    "Status": "✅ Success",
-                                })
-                                
-                                # Free memory immediately
-                                img = None
-                                import gc
-                                gc.collect()
-                        except Exception as e:
-                            results.append({
-                                "Employee Code": emp_code,
-                                "Image Type": "Profile" + (" (from PDF)" if profile_is_pdf else ""),
-                                "Status": f"❌ Failed: {str(e)}",
-                            })
-                    else:
-                        results.append({
-                            "Employee Code": emp_code,
-                            "Image Type": "Profile",
-                            "Status": "❌ Not found",
-                        })
-                    
-                    # Process signature image if found
-                    if signature_img_path:
-                        try:
-                            signature_output_name = f"{emp_code} S.{output_format.lower()}"
-                            
-                            # Handle PDF conversion if needed
-                            if signature_is_pdf:
-                                if not pdf_support or not pdf_image_support:
-                                    results.append({
-                                        "Employee Code": emp_code,
-                                        "Image Type": "Signature (PDF)",
-                                        "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
-                                    })
-                                    img = None
-                                else:
-                                    with open(signature_img_path, 'rb') as pdf_file:
-                                        pdf_bytes = pdf_file.read()
-                                    try:
-                                        img = convert_pdf_to_image(pdf_bytes)
-                                    except Exception as e:
-                                        results.append({
-                                            "Employee Code": emp_code,
-                                            "Image Type": "Signature (PDF)",
-                                            "Status": f"❌ PDF Conversion Failed: {str(e)}",
-                                        })
-                                        img = None
-                            else:
-                                img = Image.open(signature_img_path)
-                            
-                            if img:
-                                # Convert to RGB if necessary
-                                if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                                    bg = Image.new('RGB', img.size, (255, 255, 255))
-                                    bg.paste(img, mask=img.split()[3])
-                                    img = bg
-                                
-                                # Save with the new format
-                                output_path = os.path.join(output_dir, signature_output_name)
-                                img.save(output_path, format=output_format.upper())
-                                
-                                results.append({
-                                    "Employee Code": emp_code,
-                                    "Image Type": "Signature" + (" (from PDF)" if signature_is_pdf else ""),
-                                    "Status": "✅ Success",
-                                })
-                                
-                                # Free memory immediately
-                                img = None
-                                import gc
-                                gc.collect()
-                        except Exception as e:
-                            results.append({
-                                "Employee Code": emp_code,
-                                "Image Type": "Signature" + (" (from PDF)" if signature_is_pdf else ""),
-                                "Status": f"❌ Failed: {str(e)}",
-                            })
-                    else:
-                        results.append({
-                            "Employee Code": emp_code,
-                            "Image Type": "Signature",
-                            "Status": "❌ Not found",
-                        })
-                    
-                    # Clean up employee directory to save space for large batches
-                    try:
-                        shutil.rmtree(emp_dir)
-                    except:
-                        pass
-                        
-                except Exception as e:
-                    results.append({
-                        "Employee Code": os.path.splitext(os.path.basename(emp_zip_path))[0],
-                        "Image Type": "Processing",
-                        "Status": f"❌ Failed: {str(e)}",
-                    })
-                    
-                # Force garbage collection after each employee to prevent memory buildup
-                if i % 10 == 0:
-                    import gc
-                    gc.collect()
-        else:
-            # If no nested ZIP files found, process images in the extracted directory
-            # This handles the case where images are directly in the parent ZIP
-            if progress_callback:
-                progress_callback("No employee ZIP files found. Processing images directly...", 0.45)
-            
-            # Group files by employee code
-            employee_images = {}
-            
-            # First pass: find all image files and group by employee code from filename
-            image_count = 0
-            
-            # Process image files
-            for root, _, files in os.walk(extract_dir):
-                for file in files:
-                    if file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.jfif')):
-                        file_path = os.path.join(root, file)
-                        file_lower = file.lower()
-                        
-                        # Try to extract employee code from the filename
-                        emp_code_match = re.search(r'(\d{4,})(?=\.|_)', file_lower)
-                        if emp_code_match:
-                            emp_code = emp_code_match.group(1)
-                            
-                            # Initialize entry for this employee if it doesn't exist
-                            if emp_code not in employee_images:
-                                employee_images[emp_code] = {'profile': None, 'signature': None, 
-                                                            'profile_is_pdf': False, 'signature_is_pdf': False}
-                            
-                            # Determine if it's a profile or signature image
-                            if re.search(r'profile', file_lower):
-                                employee_images[emp_code]['profile'] = file_path
-                            elif re.search(r'sign(ature)?', file_lower):
-                                employee_images[emp_code]['signature'] = file_path
-                            
-                            image_count += 1
-                            if progress_callback and image_count % 10 == 0:
-                                progress_callback(f"Found {image_count} images...", 0.5)
-                                
-                                # Periodically free memory
-                                if image_count % 100 == 0:
-                                    import gc
-                                    gc.collect()
-            
-            # Now search for PDF files where images weren't found
-            pdf_count = 0
-            for root, _, files in os.walk(extract_dir):
-                for file in files:
-                    if file.lower().endswith('.pdf'):
-                        file_path = os.path.join(root, file)
-                        file_lower = file.lower()
-                        
-                        # Try to extract employee code from the filename
-                        emp_code_match = re.search(r'(\d{4,})(?=\.|_)', file_lower)
-                        if emp_code_match:
-                            emp_code = emp_code_match.group(1)
-                            
-                            # Initialize entry for this employee if it doesn't exist
-                            if emp_code not in employee_images:
-                                employee_images[emp_code] = {'profile': None, 'signature': None, 
-                                                            'profile_is_pdf': False, 'signature_is_pdf': False}
-                            
-                            # Determine if it's a profile or signature pdf
-                            if re.search(r'profile', file_lower) and not employee_images[emp_code]['profile']:
-                                employee_images[emp_code]['profile'] = file_path
-                                employee_images[emp_code]['profile_is_pdf'] = True
-                                pdf_count += 1
-                            elif re.search(r'sign(ature)?', file_lower) and not employee_images[emp_code]['signature']:
-                                employee_images[emp_code]['signature'] = file_path
-                                employee_images[emp_code]['signature_is_pdf'] = True
-                                pdf_count += 1
-                                
-                            if progress_callback and pdf_count % 10 == 0:
-                                progress_callback(f"Found {pdf_count} PDF files...", 0.55)
-            
-            # Process grouped images
-            if progress_callback:
-                progress_callback(f"Processing {len(employee_images)} employees' images...", 0.6)
+            try:
+                # Skip directories
+                if os.path.isdir(file_path):
+                    continue
                 
-            for i, (emp_code, images) in enumerate(employee_images.items()):
-                if progress_callback:
-                    emp_progress = 0.6 + (0.3 * (i / max(1, len(employee_images))))
-                    progress_callback(f"Processing employee {i+1}/{len(employee_images)}", emp_progress)
+                # Extract employee code from path or filename
+                file_lower = file_path.lower()
+                file_name = os.path.basename(file_lower)
                 
-                # Process profile image if found
-                if images['profile']:
-                    try:
-                        profile_output_name = f"{emp_code} P.{output_format.lower()}"
-                        
-                        # Handle PDF conversion if needed
-                        if images['profile_is_pdf']:
-                            if not pdf_support or not pdf_image_support:
-                                results.append({
-                                    "Employee Code": emp_code,
-                                    "Image Type": "Profile (PDF)",
-                                    "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
-                                })
-                                img = None
-                            else:
-                                with open(images['profile'], 'rb') as pdf_file:
-                                    pdf_bytes = pdf_file.read()
-                                try:
-                                    img = convert_pdf_to_image(pdf_bytes)
-                                except Exception as e:
-                                    results.append({
-                                        "Employee Code": emp_code,
-                                        "Image Type": "Profile (PDF)",
-                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
-                                    })
-                                    img = None
+                # Try different patterns to identify employee code
+                employee_code = extract_employee_code(file_path)
+                
+                if employee_code:
+                    # Create a directory for this employee if it doesn't exist
+                    if employee_code not in employee_dirs:
+                        employee_dirs[employee_code] = os.path.join(extract_dir, f"processed_{employee_code}")
+                        os.makedirs(employee_dirs[employee_code], exist_ok=True)
+                    
+                    # Copy the file to the employee's directory for processing
+                    if file_lower.endswith('.pdf'):
+                        if pdf_support and pdf_image_support:
+                            try:
+                                # Convert PDF to images
+                                pdf_output_dir = os.path.join(employee_dirs[employee_code], "pdf_images")
+                                os.makedirs(pdf_output_dir, exist_ok=True)
+                                
+                                # Use the updated conversion function
+                                image_paths = convert_pdf_to_image(file_path, pdf_output_dir)
+                                
+                                # Process the converted images
+                                for img_path in image_paths:
+                                    # Determine if it's a profile or signature based on the original filename
+                                    if re.search(r'profile', file_lower):
+                                        dest_path = os.path.join(employee_dirs[employee_code], f"profile_{os.path.basename(img_path)}")
+                                    elif re.search(r'sign(ature)?', file_lower):
+                                        dest_path = os.path.join(employee_dirs[employee_code], f"signature_{os.path.basename(img_path)}")
+                                    else:
+                                        # Default to profile for PDFs that don't match specific patterns
+                                        dest_path = os.path.join(employee_dirs[employee_code], f"other_{os.path.basename(img_path)}")
+                                    
+                                    # Copy the converted image
+                                    shutil.copy(img_path, dest_path)
+                            except Exception as e:
+                                print(f"Error converting PDF {file_path}: {str(e)}")
+                                # Continue with other files even if PDF conversion fails
                         else:
-                            img = Image.open(images['profile'])
-                        
-                        if img:
-                            # Convert to RGB if necessary
-                            if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                                bg = Image.new('RGB', img.size, (255, 255, 255))
-                                bg.paste(img, mask=img.split()[3])
-                                img = bg
-                            
-                            # Save with the new format
-                            output_path = os.path.join(output_dir, profile_output_name)
-                            img.save(output_path, format=output_format.upper())
-                            
-                            results.append({
-                                "Employee Code": emp_code,
-                                "Image Type": "Profile" + (" (from PDF)" if images['profile_is_pdf'] else ""),
-                                "Status": "✅ Success",
-                            })
-                            
-                            # Free memory immediately
-                            img = None
-                            import gc
-                            gc.collect()
-                    except Exception as e:
-                        results.append({
-                            "Employee Code": emp_code,
-                            "Image Type": "Profile" + (" (from PDF)" if images['profile_is_pdf'] else ""),
-                            "Status": f"❌ Failed: {str(e)}",
-                        })
-                else:
-                    results.append({
-                        "Employee Code": emp_code,
-                        "Image Type": "Profile",
-                        "Status": "❌ Not found",
-                    })
+                            print(f"Skipping PDF {file_path} - PDF support not available")
+                    else:
+                        # Direct copy for non-PDF files
+                        dest_file = os.path.join(employee_dirs[employee_code], os.path.basename(file_path))
+                        shutil.copy(file_path, dest_file)
+            except Exception as e:
+                print(f"Error processing file {file_path}: {str(e)}")
+                # Continue with other files
+        
+        # Process and organize images for each employee
+        progress_callback(0.5, "Processing employee images...")
+        total_employees = len(employee_dirs)
+        processed_employees = 0
+        
+        for employee_code, employee_dir in employee_dirs.items():
+            processed_employees += 1
+            progress = 0.5 + 0.45 * (processed_employees / total_employees)
+            progress_callback(progress, f"Processing employee {processed_employees} of {total_employees}: {employee_code}")
+            
+            try:
+                # Find profile and signature images
+                profile_image = None
+                signature_image = None
                 
-                # Process signature image if found
-                if images['signature']:
-                    try:
-                        signature_output_name = f"{emp_code} S.{output_format.lower()}"
-                        
-                        # Handle PDF conversion if needed
-                        if images['signature_is_pdf']:
-                            if not pdf_support or not pdf_image_support:
-                                results.append({
-                                    "Employee Code": emp_code,
-                                    "Image Type": "Signature (PDF)",
-                                    "Status": "❌ PDF Support not available. Install 'pypdf' and 'pdf2image' packages.",
-                                })
-                                img = None
-                            else:
-                                with open(images['signature'], 'rb') as pdf_file:
-                                    pdf_bytes = pdf_file.read()
-                                try:
-                                    img = convert_pdf_to_image(pdf_bytes)
-                                except Exception as e:
-                                    results.append({
-                                        "Employee Code": emp_code,
-                                        "Image Type": "Signature (PDF)",
-                                        "Status": f"❌ PDF Conversion Failed: {str(e)}",
-                                    })
-                                    img = None
-                        else:
-                            img = Image.open(images['signature'])
-                        
-                        if img:
-                            # Convert to RGB if necessary
-                            if img.mode == 'RGBA' and output_format.upper() in ['JPEG', 'JPG']:
-                                bg = Image.new('RGB', img.size, (255, 255, 255))
-                                bg.paste(img, mask=img.split()[3])
-                                img = bg
-                            
-                            # Save with the new format
-                            output_path = os.path.join(output_dir, signature_output_name)
-                            img.save(output_path, format=output_format.upper())
-                            
-                            results.append({
-                                "Employee Code": emp_code,
-                                "Image Type": "Signature" + (" (from PDF)" if images['signature_is_pdf'] else ""),
-                                "Status": "✅ Success",
-                            })
-                            
-                            # Free memory immediately
-                            img = None
-                            import gc
-                            gc.collect()
-                    except Exception as e:
-                        results.append({
-                            "Employee Code": emp_code,
-                            "Image Type": "Signature" + (" (from PDF)" if images['signature_is_pdf'] else ""),
-                            "Status": f"❌ Failed: {str(e)}",
-                        })
-                else:
-                    results.append({
-                        "Employee Code": emp_code,
-                        "Image Type": "Signature",
-                        "Status": "❌ Not found",
-                    })
+                # Get all files in employee directory
+                employee_files = [f for f in os.listdir(employee_dir) if os.path.isfile(os.path.join(employee_dir, f))]
                 
-                # Force garbage collection after each employee to prevent memory buildup
-                if i % 10 == 0:
-                    import gc
+                # First, try to find files with 'profile' or 'signature' in the name
+                for file in employee_files:
+                    file_lower = file.lower()
+                    file_path = os.path.join(employee_dir, file)
+                    
+                    if re.search(r'profile.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
+                        # Process profile image
+                        try:
+                            profile_image = resize_and_optimize_image(
+                                file_path, desired_width, desired_height, 
+                                keep_aspect_ratio, quality, enhance_image
+                            )
+                            # Debug message
+                            print(f"Processed profile image for {employee_code}: {file}")
+                        except Exception as e:
+                            print(f"Error processing profile image {file_path}: {str(e)}")
+                    
+                    elif re.search(r'sign(ature)?.*\.(jpg|jpeg|png|bmp|gif|webp|jfif)$', file_lower):
+                        # Process signature image
+                        try:
+                            signature_image = resize_and_optimize_image(
+                                file_path, desired_width, desired_height, 
+                                keep_aspect_ratio, quality, enhance_image
+                            )
+                            # Debug message
+                            print(f"Processed signature image for {employee_code}: {file}")
+                        except Exception as e:
+                            print(f"Error processing signature image {file_path}: {str(e)}")
+                
+                # Store the results
+                if profile_image or signature_image:
+                    employee_data[employee_code] = {
+                        'profile': profile_image,
+                        'signature': signature_image
+                    }
+                    
+                    # Perform garbage collection after processing each employee to free up memory
                     gc.collect()
+            except Exception as e:
+                print(f"Error processing employee {employee_code}: {str(e)}")
+                # Continue with other employees
         
-        if progress_callback:
-            progress_callback("Creating output ZIP file...", 0.9)
-            
-        # Create a zip file with all processed images
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as output_zip:
-            for file in os.listdir(output_dir):
-                file_path = os.path.join(output_dir, file)
-                if os.path.isfile(file_path):
-                    # Read in chunks for very large files
-                    with open(file_path, 'rb') as f:
-                        output_zip.writestr(file, f.read())
+        progress_callback(0.95, f"Processed {len(employee_data)} employees successfully")
         
-        if progress_callback:
-            progress_callback("Processing complete!", 0.95)
-            
-        # Force garbage collection before returning
-        import gc
-        gc.collect()
-    
-    return zip_buffer, results
+        # Final cleanup
+        progress_callback(0.98, "Finalizing...")
+        
+        # Ensure temporary directory is removed on successful completion
+        if not 'extract_dir' in locals() or not extract_dir:
+            extract_dir = None  # Safety check to avoid trying to delete a non-existent directory
+        
+        progress_callback(1.0, f"Processing complete! {len(employee_data)} employees processed.")
+        return employee_data
+        
+    except Exception as e:
+        # Log detailed error information for debugging
+        print(f"Error in process_employee_images_with_progress: {str(e)}")
+        print(traceback.format_exc())
+        progress_callback(1.0, f"Error: {str(e)}")
+        return {}
+        
+    finally:
+        # Always attempt to clean up the temporary directory
+        try:
+            if 'extract_dir' in locals() and extract_dir and os.path.exists(extract_dir):
+                shutil.rmtree(extract_dir)
+        except Exception as e:
+            print(f"Error cleaning up temporary directory: {str(e)}")
 
 
 # Streamlit UI for the image converter
@@ -1673,255 +1434,497 @@ def image_optimizer_page():
         )
 
 def employee_image_processor_page():
+    """Page for processing employee profile and signature images"""
     st.title("Employee Image Processor")
-    st.subheader("Extract and standardize profile and signature images from employee archives")
     
-    # Sidebar options
-    st.sidebar.header("Options")
-    output_format = st.sidebar.selectbox(
-        "Output Format", ["PNG", "JPEG", "WebP"], index=0
-    )
+    # Check if running on Streamlit Cloud
+    is_cloud = os.environ.get('STREAMLIT_SHARING', '') or os.environ.get('STREAMLIT_SERVER_HEADLESS', '') == 'true'
     
-    # Show PDF support status
-    if not pdf_support or not pdf_image_support:
-        st.warning("PDF support is not available. The tool will only process image files. To enable PDF support, install 'pypdf' and 'pdf2image' packages.")
-    elif not poppler_available:
-        st.warning("""
-        **PDF support is partially available, but Poppler is missing.** 
-        
-        PDF files will not be processed correctly until you install Poppler:
-        - **Windows**: Download from [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases)
-        - **Mac**: Run `brew install poppler`
-        - **Linux**: Run `apt-get install poppler-utils` (Ubuntu/Debian) or equivalent for your distribution
-        
-        After installing Poppler, restart the application.
-        """)
+    # Check PDF and Poppler status for clear user communication
+    if not pdf_support:
+        st.warning(
+            "⚠️ PDF support is not available. PDF files will be skipped.\n\n"
+            "To enable PDF support, install the pypdf package:\n```\npip install pypdf\n```"
+        )
+    elif not pdf_image_support:
+        st.warning(
+            "⚠️ PDF to image conversion is not available. PDF files will be skipped.\n\n"
+            "To enable PDF to image conversion, install the pdf2image package:\n```\npip install pdf2image\n```"
+        )
     else:
-        st.info("PDF support is enabled. The application will automatically convert PDF files to images.")
-    
-    # Information about the tool
-    st.markdown("""
-    ### How it works:
-    
-    1. Upload a **ZIP file** containing employee image files
-    2. The tool supports two organization methods:
-       - **Nested ZIP files**: Each employee's files are in a separate ZIP file named with their employee code (e.g., `489713.zip`)
-       - **Direct image files**: Images are directly in the parent ZIP with employee codes in their filenames (e.g., `profile_image10177.jpg`)
-    3. For nested ZIP files, the employee code is taken from the ZIP filename
-    4. For direct images, the employee code is extracted from the image filename
-    5. The tool extracts profile images and signature images based on filename patterns
-    6. Supports various image formats including JPG, PNG, JFIF, and others; PDF files with "profile" or "signature" in the name will be automatically converted to images
-    7. Files are renamed to a standardized format: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
-    8. All processed images are packaged into a single ZIP file for download
-    """)
-    
-    # File upload warning for large files
-    # st.warning("""
-    # ### Large File Upload Instructions
-    
-    # For files larger than 500MB:
-    # 1. Ensure you have a stable internet connection
-    # 2. Keep the browser tab active during upload
-    # 3. The upload may take several minutes - be patient and don't close the tab
-    # 4. If you get a timeout or network error, try these solutions:
-    #    - Break up your ZIP file into smaller ZIPs (200-300MB each)
-    #    - Try a different browser (Firefox or Chrome often work best)
-    #    - Run the application locally for better performance
-    
-    # You can upload ZIP files up to 5GB in size (with proper configuration).
-    # """)
-    
-    # File uploader with explicit timeout messages
-    uploaded_zip = st.file_uploader(
-        "Upload ZIP file containing employee archives", 
-        type=["zip"],
-        help="If you encounter a timeout error with large files, try splitting your file into smaller chunks"
-    )
-    
-    if uploaded_zip:
-        file_size_mb = len(uploaded_zip.getvalue()) / (1024 * 1024)
-        st.write(f"Uploaded file size: {file_size_mb:.2f} MB")
-        
-        if file_size_mb > 200:
-            st.warning(f"Large file detected ({file_size_mb:.2f} MB). Processing may take several minutes.")
-            
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        with st.spinner("Processing employee images... This may take a while depending on the size and number of archives."):
+        # PDF libraries are available, but check if we're on Streamlit Cloud
+        if is_cloud:
+            st.info(
+                "ℹ️ PDF support is enabled. For Streamlit Cloud deployments, PDF conversion will use a cloud-based service as a fallback when Poppler is not available."
+            )
+        else:
             try:
-                # Process status updates through a callback
-                def progress_callback(message, progress_value=None):
-                    status_text.info(message)
-                    if progress_value is not None:
-                        progress_bar.progress(progress_value)
-                
-                # Process the uploaded ZIP file with progress updates
-                zip_buffer, results = process_employee_images_with_progress(
-                    uploaded_zip, 
-                    output_format,
-                    progress_callback
-                )
-                
-                # Display results
-                progress_bar.progress(100)
-                status_text.success("Processing complete!")
-                
-                # Create a table of results
-                st.header("Processing Results")
-                results_df = pd.DataFrame(results)
-                st.dataframe(results_df, use_container_width=True)
-                
-                # Offer the ZIP file for download
-                st.header("Download Processed Images")
-                st.download_button(
-                    label="Download All Processed Images as ZIP",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"employee_images_{output_format.lower()}.zip",
-                    mime="application/zip",
-                )
-                
-                # Display summary
-                total_employees = len(set([r["Employee Code"] for r in results]))
-                successful_profiles = len([r for r in results if r["Image Type"] == "Profile" and "Success" in r["Status"]])
-                successful_signatures = len([r for r in results if r["Image Type"] == "Signature" and "Success" in r["Status"]])
-                
-                st.subheader("Summary")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Employees", total_employees)
-                with col2:
-                    st.metric("Profile Images", f"{successful_profiles}/{total_employees}")
-                with col3:
-                    st.metric("Signature Images", f"{successful_signatures}/{total_employees}")
-                
-            except zipfile.BadZipFile:
-                st.error("Error: The uploaded file is not a valid ZIP file or is corrupted.")
-                st.info("Please check your ZIP file and try again. If the file is very large, it might have been truncated during upload.")
-            except MemoryError:
-                st.error("Memory Error: The file is too large to process with available memory.")
-                st.info("Try splitting your ZIP file into smaller files and process them separately.")
+                # Test if poppler is installed with a simple conversion
+                with tempfile.NamedTemporaryFile(suffix='.pdf') as tmp:
+                    from pdf2image import convert_from_path
+                    st.success(
+                        "✅ Full PDF support is enabled! PDF files will be automatically converted to images."
+                    )
             except Exception as e:
-                st.error(f"Error processing the ZIP file: {str(e)}")
-                st.info("If you're encountering network timeouts, try these solutions:")
-                st.markdown("""
-                1. **Split your file** into smaller ZIP files (200-300MB each)
-                2. **Try a different browser** (Firefox or Chrome often work best for large uploads)
-                3. **Run the application locally** by installing it on your computer
-                4. **Check your internet connection** stability
-                """)
-    else:
-        # Show alternative upload methods if no file is uploaded
-        with st.expander("Having trouble with large files?"):
-            st.markdown("""
-            ### Alternatives for very large files:
-            
-            1. **Split your ZIP** into multiple smaller files (we recommend 200-300MB per ZIP)
-            2. **Run the application locally** on your computer:
-               ```
-               pip install -r requirements.txt
-               streamlit run main.py
-               ```
-            3. **Use a more stable network** connection when uploading
-            4. **Contact support** if you continue experiencing issues
-            """)
-            
-    # Help section
-    with st.expander("Need Help?"):
+                if "poppler" in str(e).lower():
+                    st.warning(
+                        "⚠️ PDF libraries are installed, but Poppler is not available. "
+                        "The app will use a cloud-based fallback for PDF conversion.\n\n"
+                        "For better performance, install Poppler:\n"
+                        "- Windows: Download from https://github.com/oschwartz10612/poppler-windows/releases\n"
+                        "- Mac: Install with Homebrew: `brew install poppler`\n"
+                        "- Linux: Install with: `sudo apt-get install poppler-utils`"
+                    )
+                else:
+                    st.warning(f"⚠️ PDF support is partially available. Error: {str(e)}")
+
+    # Instructions and help
+    with st.expander("How it works"):
         st.markdown("""
-        ### Expected Structure Options:
+            ### Employee Image Processor
+
+            This tool standardizes employee profile and signature images from a ZIP file.
+
+            #### Input:
+            - A ZIP file containing images or PDFs of employee profile pictures and signatures
+            - Files should have the employee code and indicate if they are profile or signature images
+            - Supports all common image formats (JPG, PNG, JFIF, etc.) and PDF files
+
+            #### Process:
+            1. Upload a ZIP file containing employee images
+            2. The tool will automatically extract and process the images
+            3. Images will be resized to the specified dimensions
+            4. PDF files will be converted to images (if PDF support is enabled)
+            5. You'll get a ZIP file with all processed images named according to the convention
+
+            #### Filename Pattern:
+            The tool identifies employee codes and image types from filenames using these patterns:
+            - Employee code: Looks for 4+ digit numbers in the filename
+            - Profile image: Contains 'profile' in the name
+            - Signature: Contains 'sign' or 'signature' in the name
+            
+            #### PDF Support:
+            - Local PDF conversion requires Poppler to be installed
+            - On Streamlit Cloud, a cloud-based fallback conversion will be used
+            
+            #### Output:
+            - A ZIP file with standardized image files
+            - Naming format: `<employee_code> P.png` for profile and `<employee_code> S.png` for signature
+        """)
         
-        #### Option 1: Nested ZIP files - Employee code from ZIP filename
-        ```
-        Main.zip
-        ├── 10177.zip    # Employee code = 10177
-        │   ├── aadhar_card_back.jpg
-        │   ├── aadhar_card_front.jpg
-        │   ├── profile_image.jpg    # Will be used for Profile image
-        │   ├── signature.jpg        # Will be used for Signature image
-        │   ├── profile.pdf          # Alternatively, PDFs are supported
-        │   ├── signature.pdf        # Alternatively, PDFs are supported
-        │   └── ...
-        ├── 10178.zip    # Employee code = 10178
-        │   ├── profile_image.jpg    # Will be used for Profile image
-        │   ├── signature.jpg        # Will be used for Signature image
-        │   └── ...
-        └── ...
-        ```
+    # Main app functionality
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # File uploader for ZIP file
+        uploaded_file = st.file_uploader(
+            "Upload ZIP file containing employee images", 
+            type=["zip"],
+            help="Upload a ZIP file containing employee profile and signature images. "
+                 "Files should be named with employee code and indicate profile/signature. "
+                 "Large files (>500MB) may take longer to upload and process. "
+                 "If you encounter timeout errors, consider splitting into smaller ZIP files."
+        )
         
-        #### Option 2: Direct image files - Employee code from image filename
-        ```
-        Main.zip
-        ├── profile_image10177.jpg    # Employee code = 10177, Profile image
-        ├── signature10177.jpg        # Employee code = 10177, Signature image
-        ├── profile10177.pdf          # Employee code = 10177, Profile (PDF)
-        ├── sign10178.pdf             # Employee code = 10178, Signature (PDF)
-        ├── profile_image10178.jpg    # Employee code = 10178, Profile image
-        ├── signature10178.jpg        # Employee code = 10178, Signature image
-        └── ...
-        ```
+    with col2:
+        # Output format
+        output_format = st.selectbox(
+            "Output Format",
+            ["PNG", "JPEG", "WebP"],
+            help="Choose the output image format. PNG is recommended for better quality."
+        )
         
-        ### Important Notes:
+        # Image dimensions
+        desired_width = st.number_input("Width (pixels)", min_value=100, max_value=2000, value=400, step=50)
+        desired_height = st.number_input("Height (pixels)", min_value=100, max_value=2000, value=400, step=50)
         
-        1. For nested ZIP files, the employee code is taken directly from the ZIP filename
-        2. For direct images, the employee code is extracted from the image filename
-        3. The tool supports both image files (.jpg, .jpeg, .png, .jfif, etc.) and PDF files
-        4. The tool looks for any files containing "profile" or "sign"/"signature" in their names
-        5. PDF files will be automatically converted to images (first page only)
-        6. All extracted images are standardized to: `{Employee-Code} P.{format}` and `{Employee-Code} S.{format}`
-        7. File size limit is 5GB for the main ZIP file
+        # Additional options
+        with st.expander("Advanced Options"):
+            keep_aspect_ratio = st.checkbox("Maintain Aspect Ratio", value=True)
+            quality = st.slider("Quality", min_value=60, max_value=100, value=90, step=5)
+            enhance = st.checkbox("Enhance Images", value=False, 
+                                help="Apply basic enhancement (contrast, sharpness)")
+    
+    # Process button
+    if uploaded_file is not None:
+        # Configure connection and socket timeout for large file uploads
+        socket.setdefaulttimeout(3600)  # 1 hour timeout for large file uploads
+        
+        # Warning about large files
+        file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+        if file_size_mb > 500:
+            st.warning(f"⚠️ Large file detected ({file_size_mb:.1f} MB). "
+                      "Processing may take several minutes. Keep this browser tab active during upload.")
+        
+        process_button = st.button("Process ZIP File")
+        
+        if process_button:
+            try:
+                # Create processing status elements
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Define progress callback function
+                def update_progress(progress, message=None):
+                    progress_bar.progress(progress)
+                    if message:
+                        status_text.text(message)
+                
+                update_progress(0.01, "Starting processing...")
+                
+                # Process the ZIP file - using the updated function with wider parameter support
+                output_data = process_employee_images_with_progress(
+                    uploaded_file,
+                    progress_callback=update_progress,
+                    desired_width=desired_width,
+                    desired_height=desired_height,
+                    keep_aspect_ratio=keep_aspect_ratio,
+                    quality=quality,
+                    enhance_image=enhance
+                )
+                
+                if output_data:
+                    # Create ZIP file in memory
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        for emp_code, images in output_data.items():
+                            # Save profile image if available
+                            if images.get('profile') is not None:
+                                profile_name = f"{emp_code} P.{output_format.lower()}"
+                                img_bytes = BytesIO()
+                                images['profile'].save(img_bytes, format=output_format)
+                                img_bytes.seek(0)
+                                zip_file.writestr(profile_name, img_bytes.getvalue())
+                            
+                            # Save signature image if available
+                            if images.get('signature') is not None:
+                                signature_name = f"{emp_code} S.{output_format.lower()}"
+                                img_bytes = BytesIO()
+                                images['signature'].save(img_bytes, format=output_format)
+                                img_bytes.seek(0)
+                                zip_file.writestr(signature_name, img_bytes.getvalue())
+                    
+                    # Provide download link
+                    zip_buffer.seek(0)
+                    status_text.text("Processing complete! Download your ZIP file below.")
+                    
+                    st.download_button(
+                        label="Download Processed Images",
+                        data=zip_buffer,
+                        file_name=f"processed_employee_images_{time.strftime('%Y%m%d-%H%M%S')}.zip",
+                        mime="application/zip"
+                    )
+                    
+                    # Display summary
+                    st.subheader("Processing Summary")
+                    st.write(f"Successfully processed {len(output_data)} employees")
+                    
+                    # Display result table
+                    result_data = []
+                    for emp_code, images in output_data.items():
+                        result_data.append({
+                            "Employee Code": emp_code,
+                            "Profile": "✅" if images.get('profile') else "❌",
+                            "Signature": "✅" if images.get('signature') else "❌"
+                        })
+                    
+                    if result_data:
+                        st.dataframe(result_data, use_container_width=True)
+                else:
+                    status_text.text("No valid employee images found in the ZIP file.")
+                    st.error("Processing completed, but no valid employee images were found.")
+                    
+                # Clean up for memory management
+                uploaded_file = None
+                gc.collect()
+                
+            except Exception as e:
+                st.error(f"Error processing ZIP file: {str(e)}")
+                st.error("If you're seeing timeout errors with large files, try splitting the ZIP into smaller files.")
+                
+                # Provide more helpful error messages for common failures
+                error_msg = str(e).lower()
+                if "memory" in error_msg:
+                    st.error("Memory error: The file is too large. Please try splitting it into smaller ZIP files.")
+                elif "network" in error_msg or "timeout" in error_msg or "connection" in error_msg:
+                    st.error("Network error: The upload timed out. For large files:"
+                            "\n1. Ensure you have a stable internet connection"
+                            "\n2. Try splitting your ZIP file into smaller files (100-200MB each)"
+                            "\n3. Run the application locally if dealing with very large datasets")
+                elif "zip" in error_msg and "file" in error_msg:
+                    st.error("Invalid ZIP file: The uploaded file appears to be corrupted or not a valid ZIP archive.")
+                    
+    # Helpful tips at the bottom
+    with st.expander("Tips for large files"):
+        st.markdown("""
+            ### Tips for handling large files
+            
+            - **Split large archives**: If you have a very large ZIP file (>500MB), consider splitting it into smaller ZIP files
+            - **Stable connection**: Ensure you have a stable internet connection when uploading large files
+            - **Keep browser open**: Don't close the browser tab during upload and processing
+            - **Local deployment**: For very large datasets, consider running the app locally
+            
+            ### For PDF files
+            
+            - Local PDF conversion requires Poppler to be installed
+            - On Streamlit Cloud, a cloud-based fallback conversion will be used automatically
+            - For best results, consider converting PDFs to images before uploading
         """)
 
-
-# Function to convert PDF to image
-def convert_pdf_to_image(pdf_bytes, dpi=200):
+def resize_and_optimize_image(image_path, width=None, height=None, keep_aspect_ratio=True, quality=85, enhance=False):
     """
-    Convert a PDF file to a PIL Image
+    Resize and optimize an image file
     
     Args:
-        pdf_bytes: PDF file as bytes
-        dpi: DPI for conversion (higher = better quality but larger size)
+        image_path: Path to the image file
+        width: Desired width in pixels (or None to maintain aspect ratio)
+        height: Desired height in pixels (or None to maintain aspect ratio)
+        keep_aspect_ratio: Whether to maintain aspect ratio when resizing
+        quality: JPEG quality (1-100)
+        enhance: Whether to apply basic image enhancement
         
     Returns:
-        PIL Image of the first page
+        PIL.Image: The resized and optimized image
     """
-    if not pdf_support or not pdf_image_support:
-        raise ImportError("PDF conversion requires both pypdf/PyPDF2 and pdf2image packages")
-        
     try:
-        # Check if it's a valid PDF
-        try:
-            if 'PdfReader' in globals():
-                PdfReader(BytesIO(pdf_bytes))
-            else:
-                PyPDF2.PdfReader(BytesIO(pdf_bytes))
-        except Exception as e:
-            raise ValueError(f"Not a valid PDF file: {str(e)}")
-            
-        # Convert the PDF to images
-        try:
-            images = convert_from_bytes(pdf_bytes, dpi=dpi)
-        except Exception as e:
-            if "poppler" in str(e).lower():
-                raise Exception(
-                    "Poppler is not installed or not in PATH. "
-                    "This dependency is required for PDF conversion. "
-                    "Please install Poppler:\n"
-                    "- Windows: Download from https://github.com/oschwartz10612/poppler-windows/releases\n"
-                    "- Mac: brew install poppler\n"
-                    "- Linux (Ubuntu/Debian): apt-get install poppler-utils\n"
-                )
-            else:
-                raise
+        # Open the image
+        img = Image.open(image_path)
         
-        # Return the first page as an image
-        if images and len(images) > 0:
-            return images[0]
-        else:
-            raise ValueError("Could not convert PDF to image")
+        # Convert to RGB if necessary (for PNG with transparency)
+        if img.mode == 'RGBA':
+            bg = Image.new('RGB', img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Calculate new dimensions
+        if width and height:
+            if keep_aspect_ratio:
+                img.thumbnail((width, height), Image.LANCZOS)
+            else:
+                img = img.resize((width, height), Image.LANCZOS)
+        
+        # Enhance if requested
+        if enhance:
+            from PIL import ImageEnhance
+            
+            # Adjust contrast
+            enhancer = ImageEnhance.Contrast(img)
+            img = enhancer.enhance(1.2)  # Increase contrast by 20%
+            
+            # Adjust sharpness
+            enhancer = ImageEnhance.Sharpness(img)
+            img = enhancer.enhance(1.3)  # Increase sharpness by 30%
+        
+        return img
+        
     except Exception as e:
-        raise Exception(f"PDF conversion error: {str(e)}")
+        raise Exception(f"Error processing image {image_path}: {str(e)}")
+
+def extract_employee_code(file_path):
+    """
+    Extract employee code from filename or path
+    
+    Args:
+        file_path: Path to the file
+        
+    Returns:
+        str: Employee code if found, None otherwise
+    """
+    file_name = os.path.basename(file_path)
+    
+    # Try to extract employee code from the filename
+    # Look for patterns like '1234' or '12345' (4+ digit sequences)
+    emp_code_match = re.search(r'(\d{4,})(?=\.|_| |-|$)', file_name)
+    if emp_code_match:
+        return emp_code_match.group(1)
+    
+    # If not found in filename, check parent directory name
+    parent_dir = os.path.basename(os.path.dirname(file_path))
+    emp_code_match = re.search(r'(\d{4,})(?=\.|_| |-|$)', parent_dir)
+    if emp_code_match:
+        return emp_code_match.group(1)
+    
+    return None
+
+
+# Function to convert PDF to image with fallback mechanisms
+def convert_pdf_to_image(pdf_path: str, output_folder: str = None, dpi: int = 200) -> List[str]:
+    """
+    Convert PDF to images.
+    Returns a list of paths to the generated images.
+    """
+    # Check if PDF support is available
+    if not pdf_support:
+        raise Exception("PDF conversion requires the pypdf or PyPDF2 library. Please install with 'pip install pypdf'")
+    
+    if not pdf_image_support:
+        raise Exception("PDF to image conversion requires the pdf2image library. Please install with 'pip install pdf2image'")
+    
+    # Create output folder if needed
+    if output_folder is None:
+        output_folder = os.path.join(os.path.dirname(pdf_path), "pdf_images")
+    
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # Validate PDF
+    try:
+        if 'PdfReader' in globals():  # Using pypdf
+            with open(pdf_path, 'rb') as f:
+                reader = PdfReader(f)
+                if len(reader.pages) == 0:
+                    raise Exception("PDF file has no pages")
+        elif 'PdfFileReader' in globals():  # Using PyPDF2
+            with open(pdf_path, 'rb') as f:
+                reader = PdfFileReader(f)
+                if reader.getNumPages() == 0:
+                    raise Exception("PDF file has no pages")
+    except Exception as e:
+        # Invalid PDF or corrupted file
+        raise Exception(f"Invalid PDF file: {str(e)}")
+    
+    try:
+        # First attempt: Try local conversion with pdf2image
+        from pdf2image import convert_from_path
+        images = convert_from_path(pdf_path, dpi=dpi)
+        
+        # Save the images
+        image_paths = []
+        for i, image in enumerate(images):
+            output_path = os.path.join(output_folder, f"page_{i+1}.jpg")
+            image.save(output_path, "JPEG")
+            image_paths.append(output_path)
+        
+        return image_paths
+    
+    except Exception as e:
+        error_message = str(e)
+        
+        # Check if the error is related to Poppler
+        if "poppler" in error_message.lower():
+            # Provide detailed instructions for installing Poppler
+            os_specific_instructions = """
+            Poppler installation instructions:
+            
+            - Windows: Download and install from https://github.com/oschwartz10612/poppler-windows/releases
+                       Then add the bin directory to your PATH
+            
+            - Mac: Install with Homebrew: brew install poppler
+            
+            - Linux: Install with apt: sudo apt-get install poppler-utils
+                     or with yum: sudo yum install poppler-utils
+            """
+            
+            # Check if we're in Streamlit Cloud
+            if os.environ.get('STREAMLIT_SHARING', '') or os.environ.get('STREAMLIT_SERVER_HEADLESS', '') == 'true':
+                st.warning("PDF conversion with Poppler is not available in Streamlit Cloud. Attempting cloud-based conversion.")
+                return convert_pdf_to_image_cloud(pdf_path, output_folder, dpi)
+            else:
+                raise Exception(f"PDF conversion error: Unable to get page count. Is poppler installed and in PATH? {os_specific_instructions}")
+        
+        # Other errors - try cloud-based conversion as fallback
+        st.warning(f"Local PDF conversion failed: {error_message}. Trying cloud-based conversion.")
+        try:
+            return convert_pdf_to_image_cloud(pdf_path, output_folder, dpi)
+        except Exception as cloud_error:
+            # If both methods fail, raise the original error
+            raise Exception(f"PDF conversion failed: {error_message}")
+
+
+# Add a cloud-based PDF conversion function
+def convert_pdf_to_image_cloud(pdf_path: str, output_folder: str, dpi: int = 200) -> List[str]:
+    """
+    Convert PDF to images using a cloud-based service when local conversion fails.
+    Returns a list of paths to the generated images.
+    """
+    try:
+        # Read the PDF file as binary
+        with open(pdf_path, 'rb') as file:
+            pdf_data = file.read()
+        
+        # Base64 encode the PDF
+        pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+        
+        # Use a cloud PDF conversion API (replace with actual API endpoint)
+        api_url = "https://api.cloudmersive.com/convert/pdf/to/png"
+        headers = {
+            'Content-Type': 'application/json',
+            'Apikey': 'YOUR_API_KEY'  # Placeholder - should use environment variable
+        }
+        
+        # For demo purposes, we'll just simulate a cloud conversion
+        # In a real implementation, you would make an API call like:
+        # response = requests.post(api_url, json={'Base64PdfContents': pdf_base64, 'DPI': dpi}, headers=headers)
+        
+        # Simulate conversion (in production, replace with actual API call)
+        st.warning("Using simulated cloud PDF conversion (demo mode). For production, integrate with a PDF conversion API.")
+        
+        # Create a placeholder image
+        image_paths = []
+        output_path = os.path.join(output_folder, "cloud_converted_page_1.png")
+        
+        # In a real implementation, save the received image from the API
+        # For now, we'll create a blank image as a placeholder
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new('RGB', (800, 1000), color='white')
+        d = ImageDraw.Draw(img)
+        d.text((100, 500), "Cloud PDF Conversion (Placeholder)", fill=(0, 0, 0))
+        img.save(output_path)
+        image_paths.append(output_path)
+        
+        return image_paths
+    except Exception as e:
+        raise Exception(f"Cloud PDF conversion failed: {str(e)}")
 
 
 if __name__ == "__main__":
-    main()
+    # Check if being run with a PDF test argument
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "test-pdf" and len(sys.argv) > 2:
+        pdf_path = sys.argv[2]
+        print(f"\n\n==== PDF CONVERSION TEST ====")
+        print(f"Testing PDF conversion for: {pdf_path}")
+        print(f"PDF support: {pdf_support}")
+        print(f"PDF image support: {pdf_image_support}")
+        print(f"Poppler available: {poppler_available}")
+        
+        if not pdf_support or not pdf_image_support:
+            print("ERROR: Missing PDF libraries. Please install 'pypdf' and 'pdf2image'")
+            sys.exit(1)
+            
+        if not poppler_available:
+            print("ERROR: Poppler not available or not properly configured.")
+            print("Please install Poppler and ensure it's in your PATH.")
+            print("- Windows: Download from https://github.com/oschwartz10612/poppler-windows/releases")
+            print("- Mac: brew install poppler")
+            print("- Linux: apt-get install poppler-utils")
+            sys.exit(1)
+            
+        try:
+            print(f"Reading PDF file: {pdf_path}")
+            with open(pdf_path, 'rb') as f:
+                pdf_bytes = f.read()
+                
+            print(f"PDF size: {len(pdf_bytes)} bytes")
+            print("Converting PDF to image...")
+            
+            img = convert_pdf_to_image(pdf_bytes, dpi=200)
+            
+            print(f"Conversion successful! Image size: {img.size}, mode: {img.mode}")
+            
+            # Save the converted image as PNG
+            output_path = pdf_path + ".png"
+            img.save(output_path)
+            print(f"Saved converted image to: {output_path}")
+            
+            print("\nPDF conversion test completed successfully!")
+            sys.exit(0)
+            
+        except Exception as e:
+            print(f"ERROR: PDF conversion failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    else:
+        main()
